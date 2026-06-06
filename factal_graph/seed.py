@@ -10,6 +10,7 @@ import re
 import httpx
 
 import db
+from db import _write_lock
 from config import settings
 from embedder import embed, embed_batch_parallel
 from chroma_store import upsert_node
@@ -679,23 +680,24 @@ async def seed_expand(node_id: int, mother_model: str = None,
         [n["content"] for n in gap_nodes]
     )
 
-    for i, gap_data in enumerate(gap_nodes):
-        content = gap_data["content"]
-        level = int(str(gap_data.get("resolution_level", missing_levels[0] if missing_levels else current_level + 1)).lstrip("Ll"))
-        emb = gap_embeddings[i] if i < len(gap_embeddings) else None
+    async with _write_lock:
+        for i, gap_data in enumerate(gap_nodes):
+            content = gap_data["content"]
+            level = int(str(gap_data.get("resolution_level", missing_levels[0] if missing_levels else current_level + 1)).lstrip("Ll"))
+            emb = gap_embeddings[i] if i < len(gap_embeddings) else None
 
-        # Attach to the expanded node
-        new_id = db.insert_node(
-            conn, content, resolution_level=level, parent_id=node_id,
-            confidence=confidence,
-        )
-        if emb:
-            upsert_node(new_id, content, emb, level, node_id, confidence)
+            # Attach to the expanded node
+            new_id = db.insert_node(
+                conn, content, resolution_level=level, parent_id=node_id,
+                confidence=confidence,
+            )
+            if emb:
+                upsert_node(new_id, content, emb, level, node_id, confidence)
 
-        created_nodes.append({"id": new_id, "level": level, "content": content[:100]})
+            created_nodes.append({"id": new_id, "level": level, "content": content[:100]})
 
-    # Recompute bboxes
-    recompute_parent_bbox(conn, node_id)
+        # Recompute bboxes
+        recompute_parent_bbox(conn, node_id)
 
     return {
         "node_id": node_id,

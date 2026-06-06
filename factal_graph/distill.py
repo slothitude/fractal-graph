@@ -14,6 +14,7 @@ import time
 import logging
 
 import db
+from db import _write_lock
 from config import settings
 from embedder import embed, embed_batch_parallel
 from chroma_store import upsert_node, query_level, get_collection, query_all_levels
@@ -233,90 +234,91 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
     created_edges = []
     content_to_id = {}  # content text → db node_id (for edge references)
 
-    # Sort by level so parents exist first (L0, L1, L3, L4, L5)
-    collected_sorted = sorted(collected, key=lambda n: n["resolution_level"])
+    async with _write_lock:
+        # Sort by level so parents exist first (L0, L1, L3, L4, L5)
+        collected_sorted = sorted(collected, key=lambda n: n["resolution_level"])
 
-    for i, node_data in enumerate(collected_sorted):
-        content = node_data["content"]
-        level = node_data["resolution_level"]
-        emb = embeddings[i] if i < len(embeddings) else None
-        if not emb:
-            continue
+        for i, node_data in enumerate(collected_sorted):
+            content = node_data["content"]
+            level = node_data["resolution_level"]
+            emb = embeddings[i] if i < len(embeddings) else None
+            if not emb:
+                continue
 
-        # Dedup check
-        if await _is_duplicate(content, emb, None, level):
-            continue
+            # Dedup check
+            if await _is_duplicate(content, emb, None, level):
+                continue
 
-        # Find best parent via vector similarity (skip for L0)
-        parent_id = None
-        if level > 0:
-            for plevel in range(level - 1, -1, -1):
-                hits = query_level(emb, plevel, n_results=1)
-                if hits:
-                    parent_id = int(hits[0]["node_id"])
-                    break
+            # Find best parent via vector similarity (skip for L0)
+            parent_id = None
+            if level > 0:
+                for plevel in range(level - 1, -1, -1):
+                    hits = query_level(emb, plevel, n_results=1)
+                    if hits:
+                        parent_id = int(hits[0]["node_id"])
+                        break
 
-        node_id = db.insert_node(
-            conn, content, resolution_level=level, parent_id=parent_id,
-            confidence=0.7,
-        )
-        upsert_node(node_id, content, emb, level, parent_id, 0.7)
-        content_to_id[content] = node_id
-        created_nodes.append({
-            "id": node_id, "level": level,
-            "content": content[:100],
-        })
-
-        # Queue cross-reference edges
-        edge_to = node_data.get("edge_to")
-        edge_type = node_data.get("edge_type")
-        if edge_to and edge_type:
-            edges_to_create.append({
-                "source_content": content,
-                "target_content": edge_to,
-                "edge_type": edge_type,
+            node_id = db.insert_node(
+                conn, content, resolution_level=level, parent_id=parent_id,
+                confidence=0.7,
+            )
+            upsert_node(node_id, content, emb, level, parent_id, 0.7)
+            content_to_id[content] = node_id
+            created_nodes.append({
+                "id": node_id, "level": level,
+                "content": content[:100],
             })
 
-    # Create cross-reference edges (batch embed targets, groups of 5)
-    if edges_to_create:
-        print(f"    Resolving {len(edges_to_create)} cross-reference edges...")
-        edge_targets = [e["target_content"] for e in edges_to_create]
-        target_texts = list(dict.fromkeys(edge_targets))  # dedup
-        target_embeddings = []
-        for i in range(0, len(target_texts), 5):
-            batch = target_texts[i:i+5]
-            batch_embs = await embed_batch_parallel(batch)
-            target_embeddings.extend(batch_embs)
+            # Queue cross-reference edges
+            edge_to = node_data.get("edge_to")
+            edge_type = node_data.get("edge_type")
+            if edge_to and edge_type:
+                edges_to_create.append({
+                    "source_content": content,
+                    "target_content": edge_to,
+                    "edge_type": edge_type,
+                })
 
-        target_text_to_emb = dict(zip(target_texts, target_embeddings))
-    else:
-        target_text_to_emb = {}
+        # Create cross-reference edges (batch embed targets, groups of 5)
+        if edges_to_create:
+            print(f"    Resolving {len(edges_to_create)} cross-reference edges...")
+            edge_targets = [e["target_content"] for e in edges_to_create]
+            target_texts = list(dict.fromkeys(edge_targets))  # dedup
+            target_embeddings = []
+            for i in range(0, len(target_texts), 5):
+                batch = target_texts[i:i+5]
+                batch_embs = await embed_batch_parallel(batch)
+                target_embeddings.extend(batch_embs)
 
-    for edge_info in edges_to_create:
-        source_id = content_to_id.get(edge_info["source_content"])
-        # Use batched target embedding
-        target_emb = target_text_to_emb.get(edge_info["target_content"])
-        all_hits = query_all_levels(target_emb, n_results=1)
-        target_id = None
-        for level_hits in all_hits.values():
-            if level_hits:
-                target_id = int(level_hits[0]["node_id"])
-                break
-        if source_id and target_id:
-            try:
-                db.insert_edge(
-                    conn, source_id, target_id,
-                    edge_type=edge_info["edge_type"], confidence=0.5,
-                    context=f"Mother-identified relationship in {domain}",
-                )
-                created_edges.append(1)
-            except (ValueError, Exception):
-                pass
+            target_text_to_emb = dict(zip(target_texts, target_embeddings))
+        else:
+            target_text_to_emb = {}
 
-    # Recompute bboxes for L0 and L1 parents
-    for cn in created_nodes:
-        if cn["level"] <= 1:
-            recompute_parent_bbox(conn, cn["id"])
+        for edge_info in edges_to_create:
+            source_id = content_to_id.get(edge_info["source_content"])
+            # Use batched target embedding
+            target_emb = target_text_to_emb.get(edge_info["target_content"])
+            all_hits = query_all_levels(target_emb, n_results=1)
+            target_id = None
+            for level_hits in all_hits.values():
+                if level_hits:
+                    target_id = int(level_hits[0]["node_id"])
+                    break
+            if source_id and target_id:
+                try:
+                    db.insert_edge(
+                        conn, source_id, target_id,
+                        edge_type=edge_info["edge_type"], confidence=0.5,
+                        context=f"Mother-identified relationship in {domain}",
+                    )
+                    created_edges.append(1)
+                except (ValueError, Exception):
+                    pass
+
+        # Recompute bboxes for L0 and L1 parents
+        for cn in created_nodes:
+            if cn["level"] <= 1:
+                recompute_parent_bbox(conn, cn["id"])
 
     store_time = round(time.time() - store_start, 1)
     total_time = round(time.time() - t0, 1)

@@ -14,6 +14,7 @@ import re
 logger = logging.getLogger(__name__)
 
 import db
+from db import _write_lock
 from config import settings
 from embedder import embed, embed_batch_parallel
 from chroma_store import upsert_node, query_level, get_collection, query_all_levels
@@ -127,133 +128,134 @@ async def fill_gaps(gaps: list[str], question: str,
     total_created = 0
     gaps_addressed = 0
 
-    for gap in gaps[:3]:  # Max 3 gaps to process
-        if total_created >= max_nodes:
-            break
-        gap_start_count = total_created
-
-        # Find nearby nodes for parent assignment context
-        gap_emb = await embed(gap)
-        nearby = []
-        all_hits = query_all_levels(gap_emb, n_results=3)
-        for level_hits in all_hits.values():
-            for hit in level_hits[:3]:
-                nid = int(hit["node_id"])
-                node = db.get_node(conn, nid)
-                if node:
-                    nearby.append(node)
-
-        if not nearby:
-            continue
-
-        # Format nearby nodes for prompt
-        nearby_desc = "\n".join(
-            f"  [ID:{n['id']} L{n['resolution_level']}] {n['content'][:120]}"
-            for n in nearby[:5]
-        )
-
-        level_meanings = "\n".join(
-            f"  L{k}: {v}" for k, v in LEVEL_MEANINGS.items()
-        )
-
-        n_to_gen = min(max_nodes - total_created, 3)
-
-        prompt = GAP_FILL_PROMPT.format(
-            question=question,
-            gap=gap,
-            nearby_nodes=nearby_desc,
-            level_meanings=level_meanings,
-            n=n_to_gen,
-        )
-
-        nodes_data = _parse_json_array(
-            await _mother_generate(prompt)
-        )
-        if not nodes_data:
-            continue
-
-        # Embed and dedup
-        texts = [n["content"] for n in nodes_data if "content" in n]
-        embeddings = await embed_batch_parallel(texts)
-
-        for i, node_data in enumerate(nodes_data):
+    async with _write_lock:
+        for gap in gaps[:3]:  # Max 3 gaps to process
             if total_created >= max_nodes:
                 break
-            if "content" not in node_data:
+            gap_start_count = total_created
+
+            # Find nearby nodes for parent assignment context
+            gap_emb = await embed(gap)
+            nearby = []
+            all_hits = query_all_levels(gap_emb, n_results=3)
+            for level_hits in all_hits.values():
+                for hit in level_hits[:3]:
+                    nid = int(hit["node_id"])
+                    node = db.get_node(conn, nid)
+                    if node:
+                        nearby.append(node)
+
+            if not nearby:
                 continue
 
-            content = node_data["content"]
-            raw_level = str(node_data.get("level", 3)).lstrip("Ll")
-            level = max(0, min(5, int(raw_level)))
-            parent_id = node_data.get("parent_id")
-            edge_type = node_data.get("edge_type", "refines")
-
-            emb = embeddings[i] if i < len(embeddings) else None
-            if not emb:
-                continue
-
-            # Validate parent exists
-            if parent_id and not db.get_node(conn, parent_id):
-                # Fall back to nearest parent from vector search
-                hits = query_level(emb, level - 1 if level > 0 else 0, n_results=1)
-                if hits:
-                    parent_id = int(hits[0]["node_id"])
-                else:
-                    parent_id = None
-
-            # Dedup check
-            if await _is_duplicate(content, emb, parent_id, level):
-                continue
-
-            # Insert node
-            node_id = db.insert_node(
-                conn, content, resolution_level=level, parent_id=parent_id,
-                confidence=0.6,
+            # Format nearby nodes for prompt
+            nearby_desc = "\n".join(
+                f"  [ID:{n['id']} L{n['resolution_level']}] {n['content'][:120]}"
+                for n in nearby[:5]
             )
-            upsert_node(node_id, content, emb, level, parent_id, 0.6)
 
-            # Create edge to parent if not already parent-child
-            if parent_id and edge_type and edge_type.lower() != "refines":
-                # refines is implicit via parent_id
-                try:
-                    db.insert_edge(
-                        conn, parent_id, node_id,
-                        edge_type=edge_type, confidence=0.5,
-                        context=f"Gap fill from: {gap[:80]}",
-                    )
-                except (ValueError, Exception):
-                    pass
-
-            created_nodes.append({
-                "id": node_id, "level": level,
-                "content": content[:100], "parent_id": parent_id,
-            })
-            total_created += 1
-
-            # Recompute bbox for parent
-            if parent_id:
-                recompute_parent_bbox(conn, node_id)
-
-        if total_created > gap_start_count:
-            gaps_addressed += 1
-
-    search_fallback = False
-
-    # Mother couldn't fill gaps — fall back to web search
-    if total_created == 0:
-        try:
-            from seed import seed_from_search
-            search_query = gaps[0] if gaps else question
-            search_result = await asyncio.wait_for(
-                seed_from_search(search_query, max_urls=3),
-                timeout=45.0,
+            level_meanings = "\n".join(
+                f"  L{k}: {v}" for k, v in LEVEL_MEANINGS.items()
             )
-            total_created += search_result.get("nodes_created", 0)
-            search_fallback = total_created > 0
-        except asyncio.TimeoutError:
-            logger.warning("Web search fallback timed out")
-        except Exception as e:
-            logger.warning("Web search fallback failed: %s", e)
+
+            n_to_gen = min(max_nodes - total_created, 3)
+
+            prompt = GAP_FILL_PROMPT.format(
+                question=question,
+                gap=gap,
+                nearby_nodes=nearby_desc,
+                level_meanings=level_meanings,
+                n=n_to_gen,
+            )
+
+            nodes_data = _parse_json_array(
+                await _mother_generate(prompt)
+            )
+            if not nodes_data:
+                continue
+
+            # Embed and dedup
+            texts = [n["content"] for n in nodes_data if "content" in n]
+            embeddings = await embed_batch_parallel(texts)
+
+            for i, node_data in enumerate(nodes_data):
+                if total_created >= max_nodes:
+                    break
+                if "content" not in node_data:
+                    continue
+
+                content = node_data["content"]
+                raw_level = str(node_data.get("level", 3)).lstrip("Ll")
+                level = max(0, min(5, int(raw_level)))
+                parent_id = node_data.get("parent_id")
+                edge_type = node_data.get("edge_type", "refines")
+
+                emb = embeddings[i] if i < len(embeddings) else None
+                if not emb:
+                    continue
+
+                # Validate parent exists
+                if parent_id and not db.get_node(conn, parent_id):
+                    # Fall back to nearest parent from vector search
+                    hits = query_level(emb, level - 1 if level > 0 else 0, n_results=1)
+                    if hits:
+                        parent_id = int(hits[0]["node_id"])
+                    else:
+                        parent_id = None
+
+                # Dedup check
+                if await _is_duplicate(content, emb, parent_id, level):
+                    continue
+
+                # Insert node
+                node_id = db.insert_node(
+                    conn, content, resolution_level=level, parent_id=parent_id,
+                    confidence=0.6,
+                )
+                upsert_node(node_id, content, emb, level, parent_id, 0.6)
+
+                # Create edge to parent if not already parent-child
+                if parent_id and edge_type and edge_type.lower() != "refines":
+                    # refines is implicit via parent_id
+                    try:
+                        db.insert_edge(
+                            conn, parent_id, node_id,
+                            edge_type=edge_type, confidence=0.5,
+                            context=f"Gap fill from: {gap[:80]}",
+                        )
+                    except (ValueError, Exception):
+                        pass
+
+                created_nodes.append({
+                    "id": node_id, "level": level,
+                    "content": content[:100], "parent_id": parent_id,
+                })
+                total_created += 1
+
+                # Recompute bbox for parent
+                if parent_id:
+                    recompute_parent_bbox(conn, node_id)
+
+            if total_created > gap_start_count:
+                gaps_addressed += 1
+
+        search_fallback = False
+
+        # Mother couldn't fill gaps — fall back to web search
+        if total_created == 0:
+            try:
+                from seed import seed_from_search
+                search_query = gaps[0] if gaps else question
+                search_result = await asyncio.wait_for(
+                    seed_from_search(search_query, max_urls=3),
+                    timeout=45.0,
+                )
+                total_created += search_result.get("nodes_created", 0)
+                search_fallback = total_created > 0
+            except asyncio.TimeoutError:
+                logger.warning("Web search fallback timed out")
+            except Exception as e:
+                logger.warning("Web search fallback failed: %s", e)
 
     return {
         "nodes_created": total_created,

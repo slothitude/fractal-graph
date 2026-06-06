@@ -1,5 +1,6 @@
 """SQLite storage layer for Fractal Graph."""
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -9,6 +10,9 @@ from config import settings
 
 _MAX_RETRIES = 5
 _BUSY_DELAY = 0.2  # seconds
+
+# Module-level asyncio Lock for write serialization across concurrent async operations
+_write_lock = asyncio.Lock()
 
 
 def _retry_commit(conn):
@@ -30,6 +34,7 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(settings.db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     _ensure_schema(conn)
     return conn
@@ -76,6 +81,12 @@ def _ensure_schema(conn: sqlite3.Connection):
 
 def insert_node(conn, content, resolution_level=2, parent_id=None,
                 confidence=0.5, bbox=None, source_url=None, metadata=None) -> int:
+    # Validate parent exists before insert — prevent FK constraint failures
+    if parent_id is not None:
+        parent = conn.execute("SELECT id FROM nodes WHERE id = ?", (parent_id,)).fetchone()
+        if not parent:
+            parent_id = None
+
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         """INSERT INTO nodes (content, resolution_level, parent_id, confidence,
