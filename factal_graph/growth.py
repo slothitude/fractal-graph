@@ -13,7 +13,7 @@ import re
 import db
 from config import settings
 from embedder import embed, embed_batch_parallel
-from chroma_store import upsert_node, query_level
+from chroma_store import upsert_node, query_level, get_collection, query_all_levels
 from graph import recompute_parent_bbox
 from seed import _mother_generate, _parse_json_array, _parse_json_object, LEVEL_MEANINGS
 
@@ -24,9 +24,7 @@ _expansion_locks: dict[str, asyncio.Lock] = {}
 
 
 def _get_lock(topic_key: str) -> asyncio.Lock:
-    if topic_key not in _expansion_locks:
-        _expansion_locks[topic_key] = asyncio.Lock()
-    return _expansion_locks[topic_key]
+    return _expansion_locks.setdefault(topic_key, asyncio.Lock())
 
 
 # --- Level-aware dedup thresholds ---
@@ -67,7 +65,7 @@ async def _is_duplicate(content: str, embedding: list[float],
             if child["resolution_level"] != level:
                 continue
             try:
-                col = __import__("chroma_store", fromlist=["get_collection"]).get_collection(level)
+                col = get_collection(level)
                 result = col.get(ids=[str(child["id"])])
                 if result and result["embeddings"] and result["embeddings"][0]:
                     sim = _cosine_sim(embedding, result["embeddings"][0])
@@ -75,15 +73,6 @@ async def _is_duplicate(content: str, embedding: list[float],
                         return True
             except Exception:
                 continue
-
-    # Also check vector search at this level
-    hits = query_level(embedding, level, n_results=5)
-    for hit in hits:
-        distance = hit.get("distance", 1.0)
-        # ChromaDB uses L2 distance, convert to approximate cosine similarity
-        sim = max(0, 1.0 - distance)
-        if sim >= threshold:
-            return True
 
     return False
 
@@ -133,20 +122,19 @@ async def fill_gaps(gaps: list[str], question: str,
     conn = db.get_db()
     created_nodes = []
     total_created = 0
-
-    # Embed the question for finding nearby nodes
-    question_emb = await embed(question)
+    gaps_addressed = 0
 
     for gap in gaps[:3]:  # Max 3 gaps to process
         if total_created >= max_nodes:
             break
+        gap_start_count = total_created
 
         # Find nearby nodes for parent assignment context
         gap_emb = await embed(gap)
         nearby = []
-        for level in range(6):
-            hits = query_level(gap_emb, level, n_results=3)
-            for hit in hits[:3]:
+        all_hits = query_all_levels(gap_emb, n_results=3)
+        for level_hits in all_hits.values():
+            for hit in level_hits[:3]:
                 nid = int(hit["node_id"])
                 node = db.get_node(conn, nid)
                 if node:
@@ -192,8 +180,8 @@ async def fill_gaps(gaps: list[str], question: str,
                 continue
 
             content = node_data["content"]
-            level = node_data.get("level", 3)
-            level = max(0, min(5, level))
+            raw_level = str(node_data.get("level", 3)).lstrip("Ll")
+            level = max(0, min(5, int(raw_level)))
             parent_id = node_data.get("parent_id")
             edge_type = node_data.get("edge_type", "refines")
 
@@ -243,10 +231,32 @@ async def fill_gaps(gaps: list[str], question: str,
             if parent_id:
                 recompute_parent_bbox(conn, node_id)
 
+        if total_created > gap_start_count:
+            gaps_addressed += 1
+
+    search_fallback = False
+
+    # Mother couldn't fill gaps — fall back to web search
+    if total_created == 0:
+        try:
+            from seed import seed_from_search
+            search_query = gaps[0] if gaps else question
+            search_result = await asyncio.wait_for(
+                seed_from_search(search_query, max_urls=3),
+                timeout=45.0,
+            )
+            total_created += search_result.get("nodes_created", 0)
+            search_fallback = total_created > 0
+        except asyncio.TimeoutError:
+            logger.warning("Web search fallback timed out")
+        except Exception as e:
+            logger.warning("Web search fallback failed: %s", e)
+
     return {
         "nodes_created": total_created,
         "nodes": created_nodes,
-        "gaps_filled": sum(1 for n in created_nodes),
+        "gaps_filled": gaps_addressed,
+        "search_fallback": search_fallback,
     }
 
 
@@ -267,9 +277,6 @@ async def enrich_topic(question: str, question_type: dict,
     """
     topic_key = question.lower()[:64]
     lock = _get_lock(topic_key)
-
-    if lock.locked():
-        return {"nodes_created": 0, "nodes": [], "reason": "enrichment_in_progress"}
 
     async with lock:
         conn = db.get_db()
@@ -315,8 +322,8 @@ async def enrich_topic(question: str, question_type: dict,
                 continue
 
             content = node_data["content"]
-            level = node_data.get("resolution_level", 3)
-            level = max(0, min(5, level))
+            raw_level = str(node_data.get("resolution_level", 3)).lstrip("Ll")
+            level = max(0, min(5, int(raw_level)))
             emb = embeddings[i] if i < len(embeddings) else None
             if not emb:
                 continue

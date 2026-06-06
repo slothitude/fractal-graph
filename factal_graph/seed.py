@@ -16,6 +16,20 @@ from chroma_store import upsert_node
 from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
 
 
+import asyncio
+import logging
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+import db
+from config import settings
+from embedder import embed, embed_batch_parallel
+from chroma_store import upsert_node
+from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
+
+
 # --- Mother model LLM calls ---
 
 async def _mother_generate(prompt: str, model: str = None,
@@ -23,6 +37,28 @@ async def _mother_generate(prompt: str, model: str = None,
     """Call the mother model (larger LLM) for structured generation."""
     model = model or settings.mother_model
     url = settings.mother_url
+
+    # Warmup: trigger load and poll until ready
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            await client.post(
+                f"{url}/api/generate",
+                json={"model": model, "prompt": ".", "stream": False,
+                      "options": {"num_predict": 1}, "think": False},
+            )
+    except Exception:
+        pass
+    for _ in range(120):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{url}/api/ps")
+                models = resp.json().get("models", [])
+                if any(m["name"] == model for m in models):
+                    break
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
     # "think": false disables qwen3.5 hidden thinking tokens (saves ~95% tokens)
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
@@ -31,6 +67,7 @@ async def _mother_generate(prompt: str, model: str = None,
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": "0",
                 "options": {
                     "temperature": 0.3,
                     "num_predict": num_predict,
@@ -371,7 +408,7 @@ async def seed_from_search(query: str, max_urls: int = 5,
             if "content" not in node_data:
                 continue
             content = node_data["content"]
-            level = node_data.get("resolution_level", 4)
+            level = int(str(node_data.get("resolution_level", 4)).lstrip("Ll"))
             level = max(3, min(5, level))  # Clamp to L3-L5
 
             emb = await embed(content)
@@ -435,14 +472,14 @@ async def seed_from_search(query: str, max_urls: int = 5,
         # Sort by level to ensure parents exist first
         sorted_indices = sorted(
             range(len(hierarchy)),
-            key=lambda i: hierarchy[i].get("resolution_level", 0)
+            key=lambda i: int(str(hierarchy[i].get("resolution_level", 0)).lstrip("Ll"))
         )
         id_map = {}  # hierarchy array index → db node_id
 
         for idx in sorted_indices:
             node_data = hierarchy[idx]
             content = node_data["content"]
-            level = node_data.get("resolution_level", 0)
+            level = int(str(node_data.get("resolution_level", 0)).lstrip("Ll"))
             level = max(0, min(2, level))  # Clamp to L0-L2
             parent_idx = node_data.get("parent_index")
             emb = hierarchy_embeddings[idx] if idx < len(hierarchy_embeddings) else None
@@ -589,7 +626,7 @@ async def seed_expand(node_id: int, mother_model: str = None,
 
     for i, gap_data in enumerate(gap_nodes):
         content = gap_data["content"]
-        level = gap_data.get("resolution_level", missing_levels[0] if missing_levels else current_level + 1)
+        level = int(str(gap_data.get("resolution_level", missing_levels[0] if missing_levels else current_level + 1)).lstrip("Ll"))
         emb = gap_embeddings[i] if i < len(gap_embeddings) else None
 
         # Attach to the expanded node

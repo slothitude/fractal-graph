@@ -79,6 +79,7 @@ The key insight (inspired by LaRQL): **the model's job is inference over structu
 | `chroma_store.py` | ChromaDB — one collection per level, concurrent-access safe               |
 | `context.py`      | Context assembler — LaRQL DESCRIBE/WALK, gather + format for LLM         |
 | `reasoning.py`    | 2B reasoning engine — LaRQL INFER, classify + synthesize + answer        |
+| `growth.py`       | Autonomous expansion — gap fill, enrichment, curiosity scan, web search fallback |
 | `query.py`        | Query engine — specificity classification, drill-down, multi-level pull   |
 | `gql.py`          | Structured graph queries — contradictions, evidence, entity comparison      |
 | `judges.py`       | Judge triad — Angel/Devil/Neutral verdicts with resolution_conflict      |
@@ -147,7 +148,20 @@ User Question
     │  Returns: answer, confidence, key_facts, gaps
     │
     ▼
-Answer (~5-8s, 2B only, no mother model touched)
+[5] AUTO-EXPAND (if low confidence or gaps)
+    │
+    ├─[a] Background enrich — fire-and-forget topic decomposition
+    │
+    └─[b] Gap fill — mother creates nodes for missing knowledge
+         │  If mother fails (no graph info) →
+         └──── web search fallback (seed_from_search)
+              SearXNG → extract URLs → mother structures into L0-L5
+    │
+    ▼
+[6] RE-SYNTHESIZE — 2B re-answers with enriched context
+    │
+    ▼
+Answer + search_fallback flag (was web search needed?)
 ```
 
 ## Benchmarking
