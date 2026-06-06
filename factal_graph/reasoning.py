@@ -47,6 +47,7 @@ async def _warmup_model(model: str, url: str) -> float:
                 if any(m["name"] == model for m in models):
                     elapsed = round(time.time() - t0, 1)
                     logger.info("Model %s loaded in %.1fs", model, elapsed)
+                    print(f"         warmup {model}: {elapsed}s")
                     return elapsed
         except Exception:
             pass
