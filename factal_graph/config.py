@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # Mother model for intelligent seeding (larger, slower, smarter)
     mother_url: str = "http://100.84.161.63:11434"
-    mother_model: str = "qwen3.5:9b"
+    mother_model: str = "granite4.1:8b"
 
     # Server
     server_port: int = 8018
