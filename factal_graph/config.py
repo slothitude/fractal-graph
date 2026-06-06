@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     max_context_tokens: int = 2048
     max_answer_tokens: int = 768
 
+    # Autonomous expansion
+    auto_expand_threshold: float = 0.4  # confidence below this triggers expansion
+    max_gap_fill_nodes: int = 5          # max nodes per gap-fill round
+    max_enrich_nodes: int = 4            # max nodes per enrichment round
+    curiosity_max_expansions: int = 3     # max expansions per curiosity scan
+    max_expansion_rounds: int = 2         # max re-answer rounds (prevents infinite loop)
+
     model_config = {"env_prefix": "FRACTAL_"}
 
 

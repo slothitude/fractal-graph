@@ -5,6 +5,7 @@ KNOW facts — it reasons over structured graph context provided by context.py.
 Factual correctness comes from the graph, coherence from the 2B.
 """
 
+import asyncio
 import re
 import json
 
@@ -189,14 +190,23 @@ async def synthesize(question: str, context_str: str,
     return parsed
 
 
-async def answer(question: str) -> dict:
+async def answer(question: str, auto_expand: bool = True,
+                 _round: int = 0) -> dict:
     """Top-level pipeline: embed -> classify -> gather -> synthesize.
 
-    2B only, no 9B touched. ~5-8s total.
+    With auto_expand, low-confidence answers trigger gap fill via the mother
+    model, then re-answer with enriched graph context. Fire-and-forget
+    enrichment runs in parallel to improve future answers.
+
+    Args:
+        question: The user's question
+        auto_expand: If True, fill gaps on low confidence and re-answer
+        _round: Internal recursion counter (max max_expansion_rounds)
 
     Returns:
         {question, answer, confidence, key_facts, gaps,
-         question_type, context_tokens, timing: {...}}
+         question_type, context_tokens, timing: {...},
+         expanded: bool, nodes_added: int}
     """
     import time
     t0 = time.time()
@@ -223,8 +233,7 @@ async def answer(question: str) -> dict:
     synthesize_time = time.time() - t4
 
     total_time = time.time() - t0
-
-    return {
+    response = {
         "question": question,
         "answer": result["answer"],
         "confidence": result["confidence"],
@@ -239,4 +248,74 @@ async def answer(question: str) -> dict:
             "synthesize_s": round(synthesize_time, 2),
             "total_s": round(total_time, 2),
         },
+        "expanded": False,
+        "nodes_added": 0,
     }
+
+    # Step 5: Auto-expand if confidence is low or gaps detected
+    conf = result.get("confidence", 1.0)
+    gaps = result.get("gaps", [])
+    if (auto_expand
+            and (conf < settings.auto_expand_threshold or len(gaps) > 0)
+            and _round < settings.max_expansion_rounds):
+
+        if _round >= settings.max_expansion_rounds:
+            response["expansion_limit_reached"] = True
+            return response
+
+        # Fire-and-forget enrichment (non-blocking)
+        asyncio.ensure_future(
+            _background_enrich(question, question_type)
+        )
+
+        # Synchronous gap fill
+        from growth import fill_gaps
+        fill_result = await fill_gaps(
+            gaps, question, max_nodes=settings.max_gap_fill_nodes,
+        )
+
+        if fill_result["nodes_created"] > 0:
+            # Re-gather context with enriched graph
+            new_context = gather_context(
+                embedding, top_k=10, max_tokens=settings.max_context_tokens,
+            )
+            new_context_str = format_context_for_llm(new_context)
+
+            # Re-synthesize with richer context
+            new_result = await synthesize(question, new_context_str, question_type)
+
+            response["answer"] = new_result["answer"]
+            response["confidence"] = new_result["confidence"]
+            response["key_facts"] = new_result["key_facts"]
+            response["gaps"] = new_result["gaps"]
+            response["expanded"] = True
+            response["nodes_added"] = fill_result["nodes_created"]
+            response["context_tokens"] = new_context["total_tokens"]
+            response["timing"]["total_s"] = round(time.time() - t0, 2)
+            response["timing"]["gap_fill_s"] = round(
+                response["timing"]["total_s"] - total_time, 2,
+            )
+
+            # If still low confidence after fill, recurse once more
+            new_conf = new_result.get("confidence", 1.0)
+            new_gaps = new_result.get("gaps", [])
+            if (new_conf < settings.auto_expand_threshold
+                    and len(new_gaps) > 0
+                    and _round + 1 < settings.max_expansion_rounds):
+                response["timing"]["total_s"] = round(time.time() - t0, 2)
+                return await answer(
+                    question, auto_expand=True, _round=_round + 1,
+                )
+
+    return response
+
+
+async def _background_enrich(question: str, question_type: dict):
+    """Fire-and-forget enrichment — decomposes topic into graph nodes."""
+    try:
+        from growth import enrich_topic
+        await enrich_topic(
+            question, question_type, max_nodes=settings.max_enrich_nodes,
+        )
+    except Exception as e:
+        print(f"Background enrichment failed: {e}")

@@ -73,3 +73,44 @@ with the think:false fix.
 ### Judge triad integration with Pantheon council/court
 The design doc mentions connecting judges to the Pantheon council/court system
 for multi-perspective deliberation. This is a future integration point.
+
+---
+
+## Autonomous Graph Self-Expansion — Mother Decomposes Itself
+
+### Goal
+Make the graph grow organically without explicit user seeding. Three mechanisms:
+1. Gap-driven auto-expansion — ask() triggers mother on low confidence
+2. Answer-enriches-graph — background enrichment during answering
+3. Continuous curiosity scan — finds sparse areas and expands them
+
+### Phase 1: growth.py
+- [x] `fill_gaps(gaps, question, max_nodes=5)` — mother fills identified gaps with dedup
+- [x] `enrich_topic(question, question_type, max_nodes=4)` — fire-and-forget topic decomposition
+- [x] `curiosity_scan(max_expansions=3)` — scan for sparse nodes, use seed_expand
+- [x] `detect_sparse_nodes(conn)` — SQL queries for leaf-below-L5, few-children nodes
+- [x] Level-aware dedup thresholds (L0:0.95 → L5:0.80)
+- [x] Asyncio locks keyed on topic (prevents concurrent enrichment race)
+- [x] Gap fill prompt with nearby nodes for parent assignment
+
+### Phase 2: reasoning.py
+- [x] `answer(question, auto_expand=True, _round=0)` — auto_expand param, backward compat
+- [x] Low confidence (< 0.4) or gaps detected → fill_gaps → re-answer
+- [x] Background enrichment via asyncio.ensure_future (fire-and-forget)
+- [x] max_expansion_rounds guard (default 2, prevents infinite loop)
+- [x] Returns `expanded: True`, `nodes_added: N`, `expansion_limit_reached` flag
+
+### Phase 3: factal_server.py + config.py
+- [x] `ask(question, auto_expand=True)` — pass auto_expand to answer_fn
+- [x] `curiosity_scan(max_expansions=3)` — new MCP tool
+- [x] Config: auto_expand_threshold, max_gap_fill_nodes, max_enrich_nodes,
+      curiosity_max_expansions, max_expansion_rounds
+
+### Verification
+- [ ] `ask("What is the economic impact of sea level rise?")` — detect gaps, fill, re-answer
+- [ ] `curiosity_scan()` — find and expand sparse nodes
+- [ ] `ask("What is NATO?")` — should NOT trigger expansion (high confidence)
+- [ ] `graph_stats()` — more nodes after expansion
+- [ ] No duplicate nodes (level-aware dedup)
+- [ ] Concurrent `ask()` calls on same topic — no duplicates (asyncio Lock)
+- [ ] max_expansion_rounds=2 — stops after 2 rounds, returns expansion_limit_reached

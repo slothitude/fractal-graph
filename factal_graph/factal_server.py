@@ -10,6 +10,7 @@ from query import query as query_fn, drill_down as drill_down_fn, search_nodes a
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
 from judges import judge_topic as judge_topic_fn
 from reasoning import answer as answer_fn
+from growth import curiosity_scan as curiosity_scan_fn
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("fractal-graph")
@@ -169,6 +170,21 @@ async def seed_expand(node_id: int, mother_model: str = None) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
+@mcp.tool()
+async def curiosity_scan(max_expansions: int = 3) -> str:
+    """Scan the graph for sparse areas and expand them automatically.
+
+    Finds nodes with no children below L5, nodes with few children,
+    and high-confidence nodes lacking evidence. Uses the mother model
+    via seed_expand to fill gaps. Rate-limited per scan.
+
+    Args:
+        max_expansions: Maximum nodes to expand per scan (default 3)
+    """
+    result = await curiosity_scan_fn(max_expansions=max_expansions)
+    return json.dumps(result, indent=2, default=str)
+
+
 # ============================================================
 # Judge Triad
 # ============================================================
@@ -270,17 +286,21 @@ async def get_node(node_id: int) -> str:
 # ============================================================
 
 @mcp.tool()
-async def ask(question: str) -> str:
+async def ask(question: str, auto_expand: bool = True) -> str:
     """Ask a question and get an answer from the 2B reasoning engine.
 
     The core user-facing tool. The 2B model reasons over structured graph
     context (not recall). Pipeline: embed -> classify (2B) -> gather context
     -> synthesize answer (2B). ~5-8s, 2B only, no 9B touched.
 
+    When auto_expand is True and confidence is low, the mother model fills
+    knowledge gaps then re-answers with richer context.
+
     Args:
         question: Your question (e.g. "Why did Russia oppose NATO expansion?")
+        auto_expand: If True, fill gaps on low confidence and re-answer (default True)
     """
-    result = await answer_fn(question)
+    result = await answer_fn(question, auto_expand=auto_expand)
     return json.dumps(result, indent=2, default=str)
 
 
