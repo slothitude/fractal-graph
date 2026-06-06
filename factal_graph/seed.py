@@ -32,8 +32,7 @@ from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
 
 # --- Mother model LLM calls ---
 
-async def _mother_generate(prompt: str, model: str = None,
-                           num_predict: int = 512) -> str:
+async def _mother_generate(prompt: str, model: str = None) -> str:
     """Call the mother model (larger LLM) for structured generation."""
     model = model or settings.mother_model
     url = settings.mother_url
@@ -42,9 +41,11 @@ async def _mother_generate(prompt: str, model: str = None,
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             await client.post(
-                f"{url}/api/generate",
-                json={"model": model, "prompt": ".", "stream": False,
-                      "options": {"num_predict": 1}, "think": False},
+                f"{url}/api/chat",
+                json={"model": model,
+                      "messages": [{"role": "user", "content": "."}],
+                      "stream": False,
+                      "options": {"num_predict": 1}},
             )
     except Exception:
         pass
@@ -59,24 +60,25 @@ async def _mother_generate(prompt: str, model: str = None,
             pass
         await asyncio.sleep(1.0)
 
-    # "think": false disables qwen3.5 hidden thinking tokens (saves ~95% tokens)
+    # Use /api/chat — lfm2-thinking parser auto-separates thinking into .thinking field
+    # No "format": "json" needed — it causes lfm2.5 to drain tokens on thinking with empty content
+    # No "think": False — it breaks lfm2-thinking parser and leaks raw tags
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
-            f"{url}/api/generate",
+            f"{url}/api/chat",
             json={
                 "model": model,
-                "prompt": prompt,
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "keep_alive": "0",
-                "options": {
-                    "temperature": 0.3,
-                    "num_predict": num_predict,
-                },
-                "think": False,
+                "keep_alive": "30s",
+                "options": {"temperature": 0.3},
             },
         )
         resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+        data = resp.json()
+        if "message" in data:
+            return data["message"].get("content", "").strip()
+        return data.get("content", "").strip()
 
 
 def _parse_json_array(text: str) -> list[dict]:
@@ -87,6 +89,9 @@ def _parse_json_array(text: str) -> list[dict]:
     text = text.strip()
 
     # Try direct parse
+    # Strip thinking tags (qwen, lfm, etc.)
+    text = re.sub(r"</?think\s*>", "", text).strip()
+
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
@@ -449,7 +454,7 @@ async def seed_from_search(query: str, max_urls: int = 5,
     )
 
     scaffold_result = _parse_json_object(
-        await _mother_generate(scaffold_prompt, mother_model, num_predict=1024)
+        await _mother_generate(scaffold_prompt, mother_model)
     )
     if not scaffold_result:
         # Fallback: just return pass 1 nodes, no structure

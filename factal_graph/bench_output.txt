@@ -1,0 +1,227 @@
+
+======================================================================
+Q (L0): What is NATO?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 7.2s
+         12.1s  conf=0.75  facts=2  gaps=2  ctx=1773tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.2s
+          3.4s  conf=  -  facts=2  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 13.8s
+         19.2s  conf=  -  facts=1  gaps=1  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.4s
+         13.1s  conf=0.95  facts=2  gaps=0  ctx=1739tok  expanded=F
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.3s (cached)
+          9.0s  conf=0.95  facts=1  gaps=0  expanded=F  triad_pass1=6.37s
+
+======================================================================
+Q (L2): What is Article 5 collective defense?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.2s (cached)
+          4.0s  conf=0.75  facts=2  gaps=1  ctx=1638tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.1s
+          4.0s  conf=  -  facts=1  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 13.6s
+         19.4s  conf=  -  facts=0  gaps=0  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.8s
+         warmup qwen3.5:2b: 7.3s
+         73.5s  conf=0.70  facts=2  gaps=1  ctx=1636tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+          8.6s  conf=0.82  facts=2  gaps=0  expanded=F  triad_pass1=5.54s
+
+======================================================================
+Q (L4): Which countries joined NATO between 1999 and 2020?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.3s (cached)
+          4.6s  conf=0.65  facts=2  gaps=1  ctx=1592tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.1s
+          4.0s  conf=  -  facts=1  gaps=2  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 13.3s
+         19.1s  conf=  -  facts=0  gaps=0  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.7s
+         warmup qwen3.5:2b: 6.9s
+         69.0s  conf=0.65  facts=2  gaps=1  ctx=1609tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+         10.7s  conf=0.95  facts=3  gaps=3  expanded=F  triad_pass1=6.75s
+
+======================================================================
+Q (L5): What did Putin say about NATO expansion in 2008?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.2s (cached)
+          3.9s  conf=0.35  facts=2  gaps=1  ctx=1816tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.3s
+          3.2s  conf=  -  facts=2  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 12.9s
+         19.4s  conf=  -  facts=0  gaps=0  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.8s
+         warmup qwen3.5:2b: 7.0s
+         65.6s  conf=0.65  facts=2  gaps=1  ctx=1871tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+          8.4s  conf=0.95  facts=2  gaps=1  expanded=F  triad_pass1=5.24s
+
+======================================================================
+Q (L2): What is the economic impact of sea level rise?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.2s (cached)
+          3.9s  conf=0.15  facts=2  gaps=1  ctx=1649tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.3s
+          3.7s  conf=  -  facts=2  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 16.1s
+         22.1s  conf=  -  facts=1  gaps=1  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.8s
+         warmup qwen3.5:2b: 11.6s
+         87.3s  conf=0.70  facts=2  gaps=1  ctx=1688tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+         27.6s  conf=0.30  facts=0  gaps=1  expanded=F  triad_pass1=24.8s
+
+======================================================================
+Q (L2): How does quantum error correction work?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.2s (cached)
+          3.4s  conf=0.65  facts=2  gaps=1  ctx=1288tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.1s
+          3.8s  conf=  -  facts=0  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 13.6s
+         19.6s  conf=  -  facts=0  gaps=0  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.6s
+         warmup qwen3.5:2b: 6.8s
+         73.6s  conf=1.00  facts=2  gaps=0  ctx=1428tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+         12.2s  conf=0.87  facts=2  gaps=1  expanded=F  triad_conflicts=2  triad_pass1=8.6s
+
+======================================================================
+Q (L3): What causes ocean acidification?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.3s (cached)
+          3.8s  conf=0.75  facts=2  gaps=1  ctx=1807tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.2s
+          3.1s  conf=  -  facts=2  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 13.4s
+         19.1s  conf=  -  facts=1  gaps=1  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.9s
+         warmup qwen3.5:2b: 6.8s
+         64.2s  conf=0.75  facts=2  gaps=1  ctx=1868tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+          9.6s  conf=0.95  facts=2  gaps=0  expanded=F  triad_pass1=6.61s
+
+======================================================================
+Q (L1): Why did Russia oppose NATO expansion?
+======================================================================
+  [1/5] 2B + graph...
+         warmup qwen3.5:2b: 0.2s (cached)
+          3.7s  conf=0.75  facts=2  gaps=1  ctx=1747tok  expanded=F
+  [2/5] 2B standalone...
+         warmup qwen3.5:2b: 1.4s
+          3.9s  conf=  -  facts=2  gaps=0  expanded=F
+  [3/5] 9B standalone...
+         warmup lfm2.5:latest: 13.8s
+         19.6s  conf=  -  facts=0  gaps=0  expanded=F
+  [4/5] 2B + graph + auto_expand...
+         warmup qwen3.5:2b: 6.6s
+         warmup qwen3.5:2b: 7.2s
+         78.2s  conf=0.75  facts=2  gaps=1  ctx=1904tok  expanded=T +3nodes
+  [5/5] 2B + graph + triad...
+         warmup qwen3.5:2b: 0.2s (cached)
+         warmup qwen3.5:2b: 0.2s (cached)
+          9.4s  conf=0.95  facts=2  gaps=0  expanded=F  triad_pass1=6.36s
+
+======================================================================
+DETAILED RESULTS — PIPELINE METRICS
+======================================================================
+Q (L?)   Mode       Time  Conf Facts Gaps    Ctx   Expanded Search  Triad
+----------------------------------------------------------------------------------------
+What is NATO?... (L0)                2B+Gr     12.1s  0.75     2    2 1773tok          F      -      -
+                                     2B         3.4s     -     2    0      -          F      -      -
+                                     9B        19.2s     -     1    1      -          F      -      -
+                                     2B+Ex     13.1s  0.95     2    0 1739tok          F      -      -
+                                     2B+Tr      9.0s  0.95     1    0      -          F      -      -
+What is Article 5 collective d... (L 2B+Gr      4.0s  0.75     2    1 1638tok          F      -      -
+                                     2B         4.0s     -     1    0      -          F      -      -
+                                     9B        19.4s     -     0    0      -          F      -      -
+                                     2B+Ex     73.5s  0.70     2    1 1636tok       T +3      -      -
+                                     2B+Tr      8.6s  0.82     2    0      -          F      -      -
+Which countries joined NATO be... (L 2B+Gr      4.6s  0.65     2    1 1592tok          F      -      -
+                                     2B         4.0s     -     1    2      -          F      -      -
+                                     9B        19.1s     -     0    0      -          F      -      -
+                                     2B+Ex     69.0s  0.65     2    1 1609tok       T +3      -      -
+                                     2B+Tr     10.7s  0.95     3    3      -          F      -      -
+What did Putin say about NATO ... (L 2B+Gr      3.9s  0.35     2    1 1816tok          F      -      -
+                                     2B         3.2s     -     2    0      -          F      -      -
+                                     9B        19.4s     -     0    0      -          F      -      -
+                                     2B+Ex     65.6s  0.65     2    1 1871tok       T +3      -      -
+                                     2B+Tr      8.4s  0.95     2    1      -          F      -      -
+What is the economic impact of... (L 2B+Gr      3.9s  0.15     2    1 1649tok          F      -      -
+                                     2B         3.7s     -     2    0      -          F      -      -
+                                     9B        22.1s     -     1    1      -          F      -      -
+                                     2B+Ex     87.3s  0.70     2    1 1688tok       T +3      -      -
+                                     2B+Tr     27.6s  0.30     0    1      -          F      -      -
+How does quantum error correct... (L 2B+Gr      3.4s  0.65     2    1 1288tok          F      -      -
+                                     2B         3.8s     -     0    0      -          F      -      -
+                                     9B        19.6s     -     0    0      -          F      -      -
+                                     2B+Ex     73.6s  1.00     2    0 1428tok       T +3      -      -
+                                     2B+Tr     12.2s  0.87     2    1      -          F      -  2conf
+What causes ocean acidificatio... (L 2B+Gr      3.8s  0.75     2    1 1807tok          F      -      -
+                                     2B         3.1s     -     2    0      -          F      -      -
+                                     9B        19.1s     -     1    1      -          F      -      -
+                                     2B+Ex     64.2s  0.75     2    1 1868tok       T +3      -      -
+                                     2B+Tr      9.6s  0.95     2    0      -          F      -      -
+Why did Russia oppose NATO exp... (L 2B+Gr      3.7s  0.75     2    1 1747tok          F      -      -
+                                     2B         3.9s     -     2    0      -          F      -      -
+                                     9B        19.6s     -     0    0      -          F      -      -
+                                     2B+Ex     78.2s  0.75     2    1 1904tok       T +3      -      -
+                                     2B+Tr      9.4s  0.95     2    0      -          F      -      -
+
+======================================================================
+AGGREGATE AVERAGES
+======================================================================
+  2B+Graph               avg_conf=0.60  avg_facts=2.0  avg_gaps=1.1  avg_ctx=1664tok  avg_time=4.9s  expanded=0/8  nodes=0
+  2B alone               avg_conf=0.00  avg_facts=1.5  avg_gaps=0.2  avg_ctx=0tok  avg_time=3.6s  expanded=0/8  nodes=0
+  9B alone               avg_conf=0.00  avg_facts=0.4  avg_gaps=0.4  avg_ctx=0tok  avg_time=19.7s  expanded=0/8  nodes=0
+  2B+Graph+Expand        avg_conf=0.77  avg_facts=2.0  avg_gaps=0.8  avg_ctx=1718tok  avg_time=65.6s  expanded=7/8  nodes=21
+  2B+Graph+Triad         avg_conf=0.84  avg_facts=1.8  avg_gaps=0.8  avg_ctx=0tok  avg_time=11.9s  expanded=0/8  nodes=0  avg_triad_pass1=8.8s  conflicts=2
+
+Total bench time: 846.9s
+
+Results saved to C:\Users\aaron\factal_graph\data\bench_results.json
+History appended to C:\Users\aaron\factal_graph\data\bench_history.jsonl

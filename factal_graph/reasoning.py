@@ -27,6 +27,18 @@ async def _warmup_model(model: str, url: str) -> float:
     """
     import time
     t0 = time.time()
+
+    # Check if model is already loaded (skip dummy generate if so)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{url}/api/ps")
+            if any(m["name"] == model for m in resp.json().get("models", [])):
+                elapsed = round(time.time() - t0, 1)
+                print(f"         warmup {model}: {elapsed}s (cached)")
+                return elapsed
+    except Exception:
+        pass
+
     # Kick off a dummy generate to trigger loading
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
@@ -71,7 +83,7 @@ async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "keep_alive": "0",
+                    "keep_alive": "30s",
                     "options": {
                         "temperature": 0.2,
                         "num_predict": num_predict,
@@ -108,50 +120,7 @@ def _parse_json(text: str) -> dict | None:
     return None
 
 
-async def classify_question(question: str) -> dict:
-    """2B classifies question type and extracts entities.
-
-    Returns:
-        {type: factual|analytical|comparative|exploratory|yes_no,
-         entities: [...], time_focus: ..., complexity: simple|moderate|complex}
-    """
-    prompt = (
-        "Classify this question. Return JSON ONLY.\n\n"
-        "Question: " + question + "\n\n"
-        'Return: {"type": "factual|analytical|comparative|exploratory|yes_no", '
-        '"entities": ["entity1", "entity2"], '
-        '"time_focus": "past|present|future|none", '
-        '"complexity": "simple|moderate|complex"}'
-    )
-
-    raw = await _llm_call(prompt, num_predict=200, timeout=10.0)
-    parsed = _parse_json(raw)
-
-    if not parsed:
-        # Fallback heuristic
-        q_lower = question.lower()
-        if any(q_lower.startswith(w) for w in ["is ", "are ", "does ", "do ", "did ", "can ", "will "]):
-            q_type = "yes_no"
-        elif any(w in q_lower for w in [" vs ", " compared to ", " difference between", " better than"]):
-            q_type = "comparative"
-        elif any(w in q_lower for w in ["why", "how", "explain", "analyze", "what causes"]):
-            q_type = "analytical"
-        elif len(question.split()) > 15:
-            q_type = "exploratory"
-        else:
-            q_type = "factual"
-        parsed = {"type": q_type, "entities": [], "time_focus": "none", "complexity": "moderate"}
-
-    # Ensure all keys present
-    parsed.setdefault("type", "factual")
-    parsed.setdefault("entities", [])
-    parsed.setdefault("time_focus", "none")
-    parsed.setdefault("complexity", "moderate")
-    return parsed
-
-
-async def synthesize(question: str, context_str: str,
-                      question_type: dict) -> dict:
+async def synthesize(question: str, context_str: str) -> dict:
     """2B generates answer from structured graph context.
 
     The key insight: 2B doesn't recall facts, it reasons over provided data.
@@ -160,23 +129,11 @@ async def synthesize(question: str, context_str: str,
     Returns:
         {answer: str, confidence: float, key_facts: [...], gaps: [...]}
     """
-    q_type = question_type.get("type", "factual")
-
-    type_instructions = {
-        "factual": "Answer directly with the most relevant facts from the context. Be concise.",
-        "analytical": "Analyze the relationships and causes shown in the context. Explain why.",
-        "comparative": "Compare the different perspectives or entities shown in the context.",
-        "exploratory": "Explore the topic broadly using context from multiple resolution levels.",
-        "yes_no": "Answer yes or no, then support with evidence from the context.",
-    }
-
     prompt = (
         "You are answering a question using ONLY the knowledge context provided below. "
         "Do NOT use any outside knowledge. If the context doesn't contain enough "
         "information, say so explicitly.\n\n"
-        f"Question: {question}\n"
-        f"Question type: {q_type}\n"
-        f"Instructions: {type_instructions.get(q_type, type_instructions['factual'])}\n\n"
+        f"Question: {question}\n\n"
         f"{context_str}\n\n"
         "Based ONLY on the context above, answer the question.\n"
         "Return JSON:\n"
@@ -200,7 +157,6 @@ async def synthesize(question: str, context_str: str,
         # Try extracting answer from raw text — 2B sometimes wraps JSON badly
         raw = re.sub(r"</?think\s*>", "", raw).strip()
         if raw.startswith("{") or raw.startswith('"answer"'):
-            # Re-attempt parse on cleaned text
             parsed = _parse_json(raw)
         if parsed and "answer" in parsed:
             parsed.setdefault("confidence", 0.5)
@@ -235,11 +191,10 @@ async def synthesize(question: str, context_str: str,
 
 async def answer(question: str, auto_expand: bool = True,
                  _round: int = 0) -> dict:
-    """Top-level pipeline: embed -> classify -> gather -> synthesize.
+    """Top-level pipeline: embed -> gather -> synthesize.
 
     With auto_expand, low-confidence answers trigger gap fill via the mother
-    model, then re-answer with enriched graph context. Fire-and-forget
-    enrichment runs in parallel to improve future answers.
+    model, then re-answer with enriched graph context.
 
     Args:
         question: The user's question
@@ -248,7 +203,7 @@ async def answer(question: str, auto_expand: bool = True,
 
     Returns:
         {question, answer, confidence, key_facts, gaps,
-         question_type, context_tokens, timing: {...},
+         context_tokens, timing: {...},
          expanded: bool, nodes_added: int}
     """
     import time
@@ -259,21 +214,16 @@ async def answer(question: str, auto_expand: bool = True,
     embedding = await embed(question)
     embed_time = time.time() - t1
 
-    # Step 2: Classify question (2B, ~1-2s)
+    # Step 2: Gather context from graph
     t2 = time.time()
-    question_type = await classify_question(question)
-    classify_time = time.time() - t2
-
-    # Step 3: Gather context from graph
-    t3 = time.time()
     context = gather_context(embedding, top_k=10, max_tokens=settings.max_context_tokens)
     context_str = format_context_for_llm(context)
-    context_time = time.time() - t3
+    context_time = time.time() - t2
 
-    # Step 4: Synthesize answer (2B, ~3-5s)
-    t4 = time.time()
-    result = await synthesize(question, context_str, question_type)
-    synthesize_time = time.time() - t4
+    # Step 3: Synthesize answer (2B, single call)
+    t3 = time.time()
+    result = await synthesize(question, context_str)
+    synthesize_time = time.time() - t3
 
     total_time = time.time() - t0
     response = {
@@ -282,11 +232,9 @@ async def answer(question: str, auto_expand: bool = True,
         "confidence": result["confidence"],
         "key_facts": result["key_facts"],
         "gaps": result["gaps"],
-        "question_type": question_type["type"],
         "context_tokens": context["total_tokens"],
         "timing": {
             "embed_s": round(embed_time, 2),
-            "classify_s": round(classify_time, 2),
             "context_gather_s": round(context_time, 2),
             "synthesize_s": round(synthesize_time, 2),
             "total_s": round(total_time, 2),
@@ -296,7 +244,7 @@ async def answer(question: str, auto_expand: bool = True,
         "search_fallback": False,
     }
 
-    # Step 5: Auto-expand if confidence is low or gaps detected
+    # Step 4: Auto-expand if confidence is low or gaps detected
     conf = result.get("confidence", 1.0)
     gaps = result.get("gaps", [])
     llm_failed = any("parsing failed" in g for g in gaps)
@@ -323,7 +271,7 @@ async def answer(question: str, auto_expand: bool = True,
             new_context_str = format_context_for_llm(new_context)
 
             # Re-synthesize with richer context
-            new_result = await synthesize(question, new_context_str, question_type)
+            new_result = await synthesize(question, new_context_str)
 
             response["answer"] = new_result["answer"]
             response["confidence"] = new_result["confidence"]
@@ -353,18 +301,3 @@ async def answer(question: str, auto_expand: bool = True,
                 )
 
     return response
-
-
-async def _background_enrich(question: str, question_type: dict):
-    """Fire-and-forget enrichment — decomposes topic into graph nodes."""
-    try:
-        await _warmup_model(settings.mother_model, settings.mother_url)
-        from growth import enrich_topic
-        result = await asyncio.wait_for(
-            enrich_topic(question, question_type, max_nodes=settings.max_enrich_nodes),
-            timeout=120.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning("Background enrichment timed out for: %s", question[:60])
-    except Exception as e:
-        logger.warning("Background enrichment failed: %s", e)

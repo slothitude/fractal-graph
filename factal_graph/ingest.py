@@ -1,5 +1,6 @@
 """Ingest pipeline — web search -> extract -> classify -> insert."""
 
+import asyncio
 import re
 
 import httpx
@@ -119,48 +120,88 @@ async def _classify_with_model(url: str, model: str, text: str,
     return None
 
 
+# SearXNG VPN backends (same as searchmcp — 3x Gluetun containers)
+_SEARXNG_URLS = {
+    "nl": "http://192.168.0.33:8899",
+    "us": "http://192.168.0.33:8898",
+    "sg": "http://192.168.0.33:8897",
+}
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
 async def search_searxng(query: str, max_results: int = 5) -> list[dict]:
-    """Search via SearXNG."""
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                settings.searxng_url + "/search",
-                params={"q": query, "format": "json", "count": max_results},
-            )
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            return [
-                {"url": r["url"], "title": r.get("title", ""),
-                 "content": r.get("content", "")}
-                for r in results
-            ]
-    except Exception as e:
-        print(f"SearXNG search failed: {e}")
-        return []
+    """Search via SearXNG with parallel fan-out to 3 VPN backends + dedup."""
+    params = {"q": query, "format": "json", "language": "en"}
+
+    async def _search_one(url: str) -> list[dict]:
+        try:
+            async with httpx.AsyncClient(timeout=15.0,
+                                         headers={"User-Agent": _USER_AGENT}) as c:
+                resp = await c.get(f"{url}/search", params=params)
+                resp.raise_for_status()
+                return resp.json().get("results", [])
+        except Exception:
+            return []
+
+    # Fan out to all backends in parallel
+    tasks = [_search_one(u) for u in _SEARXNG_URLS.values()]
+    all_raw = await asyncio.gather(*tasks)
+    raw = [r for batch in all_raw for r in batch]
+
+    # Dedup by URL
+    seen = set()
+    results = []
+    for r in raw:
+        url = r.get("url", "")
+        if url not in seen:
+            seen.add(url)
+            results.append({
+                "url": url,
+                "title": r.get("title", ""),
+                "content": r.get("content", ""),
+            })
+
+    return results[:max_results]
 
 
 async def extract_text(url: str) -> str | None:
-    """Extract text content from a URL (simple HTML stripping)."""
+    """Extract text content from a URL using trafilatura (same as searchmcp).
+
+    Falls back to BeautifulSoup on failure.
+    """
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                     headers={"User-Agent": _USER_AGENT}) as client:
+            resp = await client.get(url)
             resp.raise_for_status()
-
             html = resp.text
-            # Remove scripts and styles
-            html = re.sub(r"<script[^>]*>.*?</script>", "", html,
-                          flags=re.DOTALL | re.IGNORECASE)
-            html = re.sub(r"<style[^>]*>.*?</style>", "", html,
-                          flags=re.DOTALL | re.IGNORECASE)
-            # Remove tags
-            html = re.sub(r"<[^>]+>", " ", html)
-            # Clean whitespace
-            html = re.sub(r"\s+", " ", html).strip()
-
-            return html[:5000] if len(html.strip()) > 50 else None
     except Exception as e:
-        print(f"Text extraction failed for {url}: {e}")
+        print(f"Fetch failed for {url}: {e}")
         return None
+
+    # Tier 1: trafilatura (fast, high quality)
+    try:
+        import trafilatura
+        text = trafilatura.extract(html, url=url, include_tables=False,
+                                   favor_precision=True)
+        if text and len(text.strip()) > 50:
+            return text[:8000]
+    except Exception:
+        pass
+
+    # Tier 2: BeautifulSoup fallback (same as old naive method)
+    clean = re.sub(r"<script[^>]*>.*?</script>", "", html,
+                   flags=re.DOTALL | re.IGNORECASE)
+    clean = re.sub(r"<style[^>]*>.*?</style>", "", clean,
+                   flags=re.DOTALL | re.IGNORECASE)
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+
+    return clean[:5000] if len(clean) > 50 else None
 
 
 async def find_parent_for_text(conn, text: str, embedding: list[float],

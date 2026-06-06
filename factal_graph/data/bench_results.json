@@ -1,0 +1,965 @@
+{
+  "timestamp": "2026-06-06T17:36:08.518713+00:00",
+  "total_time_s": 846.9,
+  "results": [
+    {
+      "question": "What is NATO?",
+      "expected_level": 0,
+      "graph_2b": {
+        "question": "What is NATO?",
+        "answer": "NATO (North Atlantic Treaty Organization) was established in 1949 with twelve founding members and has since expanded to thirty countries, including the Baltic states, Central European nations like Poland and Hungary, and Eastern European countries such as North Macedonia. Its membership process involves a mandatory political consultation phase where existing members review candidates' alignment before granting formal accession.",
+        "confidence": 0.75,
+        "key_facts": [
+          "NATO was established in 1949 with twelve founding members",
+          "The alliance has expanded to thirty countries by 2023"
+        ],
+        "gaps": [
+          "Specific details on the exact date of NATO's establishment beyond 'in 1949'",
+          "Detailed information regarding specific accession dates for all current or former member states"
+        ],
+        "context_tokens": 1773,
+        "timing": {
+          "embed_s": 1.22,
+          "context_gather_s": 0.36,
+          "synthesize_s": 10.55,
+          "total_s": 12.13
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 12.13
+      },
+      "standalone_2b": {
+        "answer": "NATO stands for the North Atlantic Treaty Organization, a military alliance of thirty-two member states established in 1949 to ensure collective defense against external aggression.",
+        "confidence": 0.0,
+        "key_facts": [
+          "Established by the North Atlantic Treaty",
+          "Comprises over 30 countries including the United States and Canada"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.37
+      },
+      "standalone_9b": {
+        "answer": "...",
+        "confidence": 0.0,
+        "key_facts": [
+          "fact1"
+        ],
+        "gaps": [
+          "missing info"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.22
+      },
+      "graph_2b_expand": {
+        "question": "What is NATO?",
+        "answer": "NATO (North Atlantic Treaty Organization) was established in 1949 with twelve founding members and has since expanded to thirty countries through a formal accession process involving political consultation, diplomatic negotiations, and treaty ratification. Its membership criteria include specific requirements for candidate states such as the Czech Republic, Hungary, Poland, North Macedonia, Montenegro, Estonia, Latvia, Lithuania, Georgia, Ukraine, and Russia.",
+        "confidence": 0.95,
+        "key_facts": [
+          "NATO was established in 1949 with twelve founding members",
+          "The alliance has expanded to thirty countries through a formal accession process involving political consultation and diplomatic negotiations"
+        ],
+        "gaps": [],
+        "context_tokens": 1739,
+        "timing": {
+          "embed_s": 3.49,
+          "context_gather_s": 0.02,
+          "synthesize_s": 9.56,
+          "total_s": 13.08
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 13.08
+      },
+      "graph_2b_triad": {
+        "answer": "NATO is a political and military alliance of thirty-eight member states founded in the North Atlantic Treaty, primarily focused on collective defense against external aggression. While its core purpose remains steadfast, it has evolved into an organization with significant economic integration (the Eurozone) and extensive civilian roles like crisis management and cyber security.",
+        "confidence": 0.95,
+        "key_facts": [
+          "NATO is a political and military alliance of thirty-eight member states."
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 8.97,
+        "triad_time_s": 6.37,
+        "verdicts": {},
+        "conflicts": [],
+        "edges_created": []
+      }
+    },
+    {
+      "question": "What is Article 5 collective defense?",
+      "expected_level": 2,
+      "graph_2b": {
+        "question": "What is Article 5 collective defense?",
+        "answer": "Article 5 collective defense refers to NATO's legal obligation where an attack on one member is considered an attack against all, triggering a military response. This mechanism was originally established during the Cold War and has been expanded through processes like the Copenhagen Process to include new members such as Estonia in 2004.",
+        "confidence": 0.75,
+        "key_facts": [
+          "Article 5 collective defense clauses trigger legal obligations when a member state is attacked",
+          "NATO's eastward expansion from the late Cold War era through 2008 was driven by strategic deterrence doctrines"
+        ],
+        "gaps": [
+          "Specific details on how Article 5 activation criteria are determined in real-time scenarios"
+        ],
+        "context_tokens": 1638,
+        "timing": {
+          "embed_s": 0.43,
+          "context_gather_s": 0.01,
+          "synthesize_s": 3.58,
+          "total_s": 4.03
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 4.03
+      },
+      "standalone_2b": {
+        "answer": "Article 5 allows any member state to request military action against another if it considers an armed attack on its territory, though no country currently exercises this power unilaterally.",
+        "confidence": 0.0,
+        "key_facts": [
+          "The US Constitution's Article 5 grants the right of collective defense."
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 4.04
+      },
+      "standalone_9b": {
+        "answer": "...",
+        "confidence": 0.0,
+        "key_facts": [],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.41
+      },
+      "graph_2b_expand": {
+        "question": "What is Article 5 collective defense?",
+        "answer": "Article 5 collective defense obligates NATO member states to assist an ally if it is attacked, forming the core of the alliance's security framework. This clause was first invoked after the September 11 attacks in 2001 against Afghanistan and has been used since then.",
+        "confidence": 0.7,
+        "key_facts": [
+          "Article 5 obligates members to assist any ally that is attacked",
+          "The first invocation of Article 5 occurred after the September 11 attacks in 2001"
+        ],
+        "gaps": [
+          "No context provided regarding specific historical instances or legal mechanisms beyond general obligations."
+        ],
+        "context_tokens": 1636,
+        "timing": {
+          "embed_s": 2.64,
+          "context_gather_s": 0.01,
+          "synthesize_s": 9.84,
+          "total_s": 73.48,
+          "gap_fill_s": 60.99
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 73.48
+      },
+      "graph_2b_triad": {
+        "answer": "Article 5 of the Treaty on European Union establishes a collective defense obligation where an attack against one member state constitutes an attack against all, mandating immediate assistance from allies. While Angel correctly identifies this as the cornerstone of transatlantic cooperation and Devil accurately notes its historical roots in US/UK/France drafting and modern tensions regarding NATO expansion, both overlooks that Article 5 is a legal obligation to assist rather than a guarantee of unconditional military intervention.",
+        "confidence": 0.82,
+        "key_facts": [
+          "Article 5 mandates collective defense against attacks on one member state",
+          "Historical drafting involved the US, UK, and France"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 8.59,
+        "triad_time_s": 5.54,
+        "verdicts": {
+          "angel": {
+            "assessment": "Angel correctly identifies Article 5 as the core mechanism of transatlantic defense cooperation but overlooks specific historical nuances and modern operational shifts.",
+            "confidence": 0.8,
+            "key_node_ids": [
+              140,
+              271
+            ],
+            "stance": "for"
+          },
+          "devil": {
+            "assessment": "Devil correctly identifies the original drafting history (US/UK/France) and highlights specific modern operational contradictions like NATO expansion near Russia.",
+            "confidence": 0.85,
+            "key_node_ids": [
+              359
+            ],
+            "stance": "for"
+          },
+          "neutral": {
+            "assessment": "The neutral judge successfully bridges Angel's broad overview with Devil's specific historical and operational details to provide a coherent picture.",
+            "confidence": 0.8,
+            "key_node_ids": [
+              145
+            ],
+            "bridges": [
+              {
+                "from": 360,
+                "to": 271,
+                "explanation": "Connects the general concept of Article 5 activation (Angel) with specific historical precedents like post-9/11 invocations and NATO expansion dynamics."
+              },
+              {
+                "from": 345,
+                "to": 358,
+                "explanation": "Links Devil's finding on security dilemmas in Eastern Europe to the core legal obligation of Article 5 (assisting an attacked ally)."
+              }
+            ]
+          }
+        },
+        "conflicts": [],
+        "edges_created": []
+      }
+    },
+    {
+      "question": "Which countries joined NATO between 1999 and 2020?",
+      "expected_level": 4,
+      "graph_2b": {
+        "question": "Which countries joined NATO between 1999 and 2020?",
+        "answer": "According to the provided text, countries that joined NATO between 1999 and 2020 include Bulgaria (2008), Romania (2004), Slovakia (2007), Slovenia (2005), Czech Republic (1999), Hungary (1999), Poland (1999), Montenegro (2017), North Macedonia (2020), and Georgia (2008). The context also notes that Finland and Sweden delayed their accession until 2023-2024, which falls outside the specified timeframe.",
+        "confidence": 0.65,
+        "key_facts": [
+          "Montenegro joined NATO on June\u202f5,\u202f2017",
+          "North Macedonia joined NATO on March\u202f2,\u202f2020"
+        ],
+        "gaps": [
+          "The specific dates and names of all other countries that joined between 1999 and 2020 are not explicitly listed in the context."
+        ],
+        "context_tokens": 1592,
+        "timing": {
+          "embed_s": 0.28,
+          "context_gather_s": 0.01,
+          "synthesize_s": 4.28,
+          "total_s": 4.57
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 4.57
+      },
+      "standalone_2b": {
+        "answer": "The following countries joined NATO during the specified period:",
+        "confidence": 0.0,
+        "key_facts": [
+          "Austria, Finland, Iceland, Norway, Sweden (all in 1949), followed by Albania, Armenia, Azerbaijan, Belarus, Bosnia and Herzegovina, Bulgaria, Croatia, Cyprus, Georgia, Kazakhstan, Kosovo, Kyrgyzstan, Latvia, Lithuania, Moldova, Montenegro, North Macedonia, Russia, Serbia, Tajikistan, Turkmenistan, Ukraine (2008) and Uzbekistan."
+        ],
+        "gaps": [
+          "Specific dates for each country's accession within the 1999-2020 window are not provided in this summary.",
+          "Details on any countries that joined after 2020 or before 1949 are excluded from this list."
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.97
+      },
+      "standalone_9b": {
+        "answer": "<think>\nWe need to answer the question concisely (2-3 sentences) and return a JSON object with fields: \"answer\", \"key_facts\", and \"gaps\". The question: \"Which countries joined NATO between 1999 and 2020?\" We need to list which countries joined NATO in that period. Let's recall NATO accession timeline.\n\nNATO members:\n\n- Founding members (1949): US, UK, Canada, France, Italy, Belgium, Netherlands, Luxembourg, Norway, Denmark, Portugal, Iceland, Greece, Turkey, etc.\n\n- 1952: West Germany\n\n- 1955: I",
+        "confidence": 0.0,
+        "key_facts": [],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.07
+      },
+      "graph_2b_expand": {
+        "question": "Which countries joined NATO between 1999 and 2020?",
+        "answer": "Between 1999 and 2020, the countries that joined NATO were Bulgaria, Romania, Slovakia, Slovenia, the Czech Republic, Hungary, Poland (in 1999), Montenegro (in 2017), North Macedonia (on March 2, 2020), Estonia, Latvia, Lithuania (all in 2004), and Georgia. The context notes that Georgia's status remained unresolved as of 2020.",
+        "confidence": 0.65,
+        "key_facts": [
+          "Montenegro joined NATO on June\u202f5,\u202f2017",
+          "North Macedonia joined NATO on March\u202f2,\u202f2020"
+        ],
+        "gaps": [
+          "The specific dates of accession for Estonia, Latvia, Lithuania (all in 2004), and Bulgaria, Romania, Slovakia, Slovenia are mentioned as occurring between 1999-2020 but lack precise years or months."
+        ],
+        "context_tokens": 1609,
+        "timing": {
+          "embed_s": 3.52,
+          "context_gather_s": 0.03,
+          "synthesize_s": 10.51,
+          "total_s": 69.02,
+          "gap_fill_s": 54.95
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 69.02
+      },
+      "graph_2b_triad": {
+        "answer": "The countries that joined NATO between 1999 and 2020 are Albania, Bosnia and Herzegovina, Croatia, Kosovo (independent status), North Macedonia, Montenegro, Romania, Serbia, Slovenia, and Ukraine. While the initial post-Cold War expansion was primarily driven by Eastern European nations seeking security guarantees against Russia, subsequent years saw significant shifts including NATO's intervention in Afghanistan which influenced regional alliances like those with Pakistan and India, alongside a gradual eastward drift where countries such as Georgia and Armenia eventually joined.",
+        "confidence": 0.95,
+        "key_facts": [
+          "Albania joined on March 12, 1999",
+          "Croatia became the first country to join in December 1999",
+          "North Macedonia and Montenegro followed shortly after in late 1999"
+        ],
+        "gaps": [
+          "Specific dates for Serbia's accession (2004)",
+          "Detailed timeline of Romania's joining process",
+          "Exact membership status or transition details for Ukraine prior to its formal NATO entry"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 10.72,
+        "triad_time_s": 6.75,
+        "verdicts": {},
+        "conflicts": [],
+        "edges_created": []
+      }
+    },
+    {
+      "question": "What did Putin say about NATO expansion in 2008?",
+      "expected_level": 5,
+      "graph_2b": {
+        "question": "What did Putin say about NATO expansion in 2008?",
+        "answer": "According to the provided text, there are no records of Vladimir Putin speaking about NATO expansion in 2008; however, the document notes that a 2008 Bucharest Summit occurred where Ukraine and Georgia were promised membership action plans. The context indicates this summit was a key point of tension with Russia regarding these geopolitical constraints.",
+        "confidence": 0.35,
+        "key_facts": [
+          "The text does not contain information about Putin's statements on NATO expansion in 2008",
+          "A 2008 Bucharest Summit took place where Ukraine and Georgia were promised membership action plans"
+        ],
+        "gaps": [
+          "Specific quotes or direct remarks made by Vladimir Putin regarding the strategic implications of NATO enlargement during that specific year"
+        ],
+        "context_tokens": 1816,
+        "timing": {
+          "embed_s": 0.28,
+          "context_gather_s": 0.03,
+          "synthesize_s": 3.56,
+          "total_s": 3.87
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 3.87
+      },
+      "standalone_2b": {
+        "answer": "In September 2008, Vladimir Putin stated that the Russian Federation would not accept a new member joining NATO unless it was already an ally of Russia.",
+        "confidence": 0.0,
+        "key_facts": [
+          "Putin rejected any expansion without prior alliance with Russia",
+          "The statement came in response to concerns over Ukraine's potential accession"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.25
+      },
+      "standalone_9b": {
+        "answer": "...",
+        "confidence": 0.0,
+        "key_facts": [],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.44
+      },
+      "graph_2b_expand": {
+        "question": "What did Putin say about NATO expansion in 2008?",
+        "answer": "According to the provided text, Putin described NATO's eastward expansion in 2008 as a direct threat to Russia's security and sovereignty. He warned that this enlargement created significant diplomatic tensions by altering the geopolitical environment for non-member states.",
+        "confidence": 0.65,
+        "key_facts": [
+          "Putin described NATO's eastward expansion in 2008 as a direct threat to Russia's security and sovereignty",
+          "He warned that NATO enlargement created security dilemmas and heightened diplomatic tensions with Russia"
+        ],
+        "gaps": [
+          "Specific quotes or exact words Putin used during the 2008 summit are not mentioned in this context"
+        ],
+        "context_tokens": 1871,
+        "timing": {
+          "embed_s": 2.29,
+          "context_gather_s": 0.01,
+          "synthesize_s": 10.25,
+          "total_s": 65.63,
+          "gap_fill_s": 53.08
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 65.63
+      },
+      "graph_2b_triad": {
+        "answer": "In 2008, Putin framed NATO's eastward expansion as an existential threat to Russia that necessitated a strategic counterbalance. While Angel identified the core motivation of this perceived security dilemma and Devil provided specific statistical evidence regarding the scale of enlargement, Neutral bridges these perspectives by acknowledging how such broad geopolitical shifts directly influenced Russian diplomatic tensions.",
+        "confidence": 0.95,
+        "key_facts": [
+          "Putin viewed NATO's eastward expansion as an existential threat to Russia in 2008",
+          "Statistical evidence highlights the scale of enlargement decisions"
+        ],
+        "gaps": [
+          "Specific exact quotes from Putin regarding 'existential' threats are not provided"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 8.45,
+        "triad_time_s": 5.24,
+        "verdicts": {
+          "angel": {
+            "assessment": "Angel identifies the strategic rationale behind NATO's eastward expansion as an existential threat to Russia in 2008.",
+            "confidence": 1.0,
+            "key_node_ids": [
+              364
+            ],
+            "stance": "for"
+          },
+          "devil": {
+            "assessment": "Devil highlights specific instances of security dilemmas and statistical evidence regarding NATO's expansion in the region.",
+            "confidence": 1.0,
+            "key_node_ids": [
+              365
+            ],
+            "stance": "for"
+          },
+          "neutral": {
+            "assessment": "Neutral nodes bridge Angel's strategic overview with Devil's specific security dilemmas and statistical evidence to form a coherent picture.",
+            "confidence": 1.0,
+            "key_node_ids": [
+              364
+            ],
+            "bridges": [
+              {
+                "from": 286,
+                "to": 365,
+                "explanation": "Connects the political motivations driving expansion (Angel) with the resulting security dilemmas and diplomatic tensions identified by Devil."
+              },
+              {
+                "from": 16,
+                "to": 270,
+                "explanation": "Links general geopolitical impact on Russia's perception to specific concerns regarding Russian reaction and tension arising from enlargement decisions."
+              }
+            ]
+          }
+        },
+        "conflicts": [],
+        "edges_created": []
+      }
+    },
+    {
+      "question": "What is the economic impact of sea level rise?",
+      "expected_level": 2,
+      "graph_2b": {
+        "question": "What is the economic impact of sea level rise?",
+        "answer": "The provided knowledge base does not contain direct economic impact data for sea level rise; however, it indicates that rising temperatures affect polar ice sheets and ocean acidification in the cryosphere. The text also notes that climate science studies socio-economic impacts of global climate alteration but offers no specific financial figures or market effects.",
+        "confidence": 0.15,
+        "key_facts": [
+          "Rising temperatures affect polar ice sheets",
+          "Ocean acidification impairs calcifying organisms' ability to build shells in polar regions"
+        ],
+        "gaps": [
+          "Specific economic impacts of sea level rise on markets or economies are not mentioned"
+        ],
+        "context_tokens": 1649,
+        "timing": {
+          "embed_s": 0.28,
+          "context_gather_s": 0.01,
+          "synthesize_s": 3.56,
+          "total_s": 3.85
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 3.85
+      },
+      "standalone_2b": {
+        "answer": "Sea level rise significantly threatens coastal economies by increasing flood risks, displacing populations, and causing infrastructure damage. Key impacts include rising insurance costs for vulnerable regions and potential long-term loss of land value in low-lying areas.",
+        "confidence": 0.0,
+        "key_facts": [
+          "Increased flooding damages property and disrupts supply chains",
+          "Coastal communities face higher insurance premiums due to risk exposure"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.68
+      },
+      "standalone_9b": {
+        "answer": "...",
+        "confidence": 0.0,
+        "key_facts": [
+          "fact1"
+        ],
+        "gaps": [
+          "missing info"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 22.12
+      },
+      "graph_2b_expand": {
+        "question": "What is the economic impact of sea level rise?",
+        "answer": "According to the provided text, sea level rise threatens coastal real estate value by reducing it up to 30% in low-lying regions within decades. The World Bank estimates that global economic losses from this phenomenon could reach $1 trillion annually by 2050.",
+        "confidence": 0.7,
+        "key_facts": [
+          "Sea-level rise may reduce the value of at-risk coastal real estate by up to 30% in low-lying regions within decades",
+          "The World Bank estimates that coastal flooding could cost the global economy $1 trillion per year by 2050"
+        ],
+        "gaps": [
+          "Specific details regarding long-term economic growth impacts, adaptation infrastructure investment costs beyond 2030, or direct data on agricultural productivity changes."
+        ],
+        "context_tokens": 1688,
+        "timing": {
+          "embed_s": 3.46,
+          "context_gather_s": 0.01,
+          "synthesize_s": 9.94,
+          "total_s": 87.32,
+          "gap_fill_s": 73.91
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 87.32
+      },
+      "graph_2b_triad": {
+        "answer": "```json\n{\n  \"answer\": \"Sea level rise is projected to cause global coastal flooding and saltwater intrusion, threatening millions of people's lives and livelihoods. While the economic benefits from tourism may increase in some areas due to new ports or land reclamation projects, these gains are often outweighed by massive costs related to infrastructure damage, insurance premiums, health care burdens, and displacement.\",\n  \"confidence\": 0.92,\n  \"key_facts\": [\n    \"Global sea level rise threatens",
+        "confidence": 0.3,
+        "key_facts": [],
+        "gaps": [
+          "JSON parsing failed"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 27.64,
+        "triad_time_s": 24.8,
+        "verdicts": {},
+        "conflicts": [],
+        "edges_created": []
+      }
+    },
+    {
+      "question": "How does quantum error correction work?",
+      "expected_level": 2,
+      "graph_2b": {
+        "question": "How does quantum error correction work?",
+        "answer": "Quantum error correction relies on fault-tolerant systems that are expected to become commercially viable in the early 2030s. While current quantum processors like Google's Willow and PsiQuantum exist, they lack the necessary infrastructure for full commercialization until then.",
+        "confidence": 0.65,
+        "key_facts": [
+          "Fault-tolerant quantum systems are expected to become commercially viable in the early 2030s",
+          "Google introduced its 'Willow' quantum processor"
+        ],
+        "gaps": [
+          "Detailed technical mechanisms of how specific error correction codes function"
+        ],
+        "context_tokens": 1288,
+        "timing": {
+          "embed_s": 0.29,
+          "context_gather_s": 0.01,
+          "synthesize_s": 3.14,
+          "total_s": 3.44
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 3.44
+      },
+      "standalone_2b": {
+        "answer": "{\n  \"answer\": \"Quantum error correction works by encoding logical qubits into multiple physical qubits using stabilizer measurements to detect and correct errors without collapsing the superposition.\",\n  \"key_facts\": [\n    \"It uses redundancy through entangled states of many physical qubits.\"\n    \"Stabilizers are measured repeatedly to identify bit-flip or phase-flip errors.\"\n    \"Correction is performed by applying specific unitary operations based on error syndromes.\"\n  ],\n  \"gaps\": [\n    \"Spe",
+        "confidence": 0.0,
+        "key_facts": [],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.81
+      },
+      "standalone_9b": {
+        "answer": "...",
+        "confidence": 0.0,
+        "key_facts": [],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.62
+      },
+      "graph_2b_expand": {
+        "question": "How does quantum error correction work?",
+        "answer": "Quantum error correction protects qubits by encoding logical information across multiple physical qubits to detect and correct decoherence, a process that relies on syndrome extraction measures parity violations. This technique is essential for fault-tolerant systems expected to become commercially viable in the early 2030s.",
+        "confidence": 1.0,
+        "key_facts": [
+          "Quantum error correction protects qubits by encoding logical information across multiple physical qubits",
+          "Fault-tolerant quantum systems are expected to become commercially viable in the early 2030s"
+        ],
+        "gaps": [],
+        "context_tokens": 1428,
+        "timing": {
+          "embed_s": 2.88,
+          "context_gather_s": 0.02,
+          "synthesize_s": 9.7,
+          "total_s": 73.64,
+          "gap_fill_s": 61.04
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 73.64
+      },
+      "graph_2b_triad": {
+        "answer": "Quantum error correction relies on logical qubits encoded into physical ones using stabilizer measurements to detect and correct errors without collapsing superposition, a process distinct from climate science. While Angel's broad overview lacks technical specificity regarding the underlying mechanism of fault-tolerant thresholds, Devil correctly critiques current hardware limitations that delay commercial viability until 2035 or later; however, Neutral bridges clarify that Monte Carlo simulations (ID:159) are relevant for probabilistic analysis rather than direct error correction mechanics.",
+        "confidence": 0.87,
+        "key_facts": [
+          "Quantum error correction uses stabilizer measurements to detect and correct errors without collapsing superposition",
+          "Current hardware capabilities significantly delay commercial viability until the early 2030s"
+        ],
+        "gaps": [
+          "Detailed technical specifications of specific logical qubit encoding schemes (e.g., surface codes)"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 12.22,
+        "triad_time_s": 8.6,
+        "verdicts": {
+          "angel": {
+            "assessment": "Angel's assessment is optimistic but lacks technical specificity regarding the mechanism of error correction; it conflates quantum computing with climate science.",
+            "confidence": 0.75,
+            "key_node_ids": [
+              127,
+              304
+            ],
+            "stance": "neutral"
+          },
+          "devil": {
+            "assessment": "Devil's assessment is skeptical and highlights significant technical contradictions regarding current hardware capabilities; it correctly identifies the distinction between commercial viability timelines and error correction thresholds.",
+            "confidence": 0.85,
+            "key_node_ids": [
+              125
+            ],
+            "stance": "against"
+          },
+          "neutral": {
+            "assessment": "Neutral stance: Angel's broad overview is disconnected from the technical reality of quantum error correction described by Devil.",
+            "confidence": 0.8,
+            "key_node_ids": [
+              371
+            ],
+            "bridges": [
+              {
+                "from": 371,
+                "to": 125,
+                "explanation": "Angel cites 'Mitigation and Adaptation Strategies' (ID:304) which discusses climate resilience; Neutral correctly identifies this as a misclassification of quantum error correction mechanics. Devil's ID:125 regarding fault-tolerant systems becoming commercially viable in the early 2030s contradicts Angel's focus on commercial launch dates, suggesting Angel may be conflating market projections with technical milestones."
+              }
+            ]
+          }
+        },
+        "conflicts": [
+          {
+            "angel_node": 159,
+            "devil_node": 108,
+            "gap_type": "perspective_divergence",
+            "severity": 0.6,
+            "description": "Angel identifies ID:159 (Monte Carlo simulations for probabilistic analysis) as a relevant node for understanding error correction's uncertainty quantification. Devil correctly refutes this by citing ID:108 which states the Willow processor achieved performance *below* the surface code threshold without successful error correction, implying that Monte Carlo methods alone cannot currently solve the fundamental hardware limitation Angel seems to be overlooking."
+          },
+          {
+            "angel_node": 304,
+            "devil_node": 125,
+            "gap_type": "resolution_mismatch",
+            "severity": 0.7,
+            "description": "Angel's ID:304 focuses on 'Mitigation and Adaptation Strategies' (climate resilience). Devil correctly identifies this as a category error by citing ID:125 regarding commercial viability of fault-tolerant systems in the early 2030s. Angel fails to bridge the gap between climate adaptation strategies and quantum hardware development timelines, leading to an optimistic overview that ignores technical constraints."
+          }
+        ],
+        "edges_created": [
+          {
+            "edge_id": 184,
+            "from": 159,
+            "to": 108,
+            "severity": 0.6,
+            "gap_type": "perspective_divergence"
+          },
+          {
+            "edge_id": 185,
+            "from": 304,
+            "to": 125,
+            "severity": 0.7,
+            "gap_type": "resolution_mismatch"
+          }
+        ]
+      }
+    },
+    {
+      "question": "What causes ocean acidification?",
+      "expected_level": 3,
+      "graph_2b": {
+        "question": "What causes ocean acidification?",
+        "answer": "Ocean acidification occurs when increased atmospheric carbon dioxide dissolves into surface waters, lowering pH levels and impairing calcifying organisms' ability to build shells. This process is linked to the broader study of how rising temperatures affect polar ice sheets and marine circulation patterns within cryosphere systems.",
+        "confidence": 0.75,
+        "key_facts": [
+          "Increased atmospheric CO2 dissolves into surface waters, lowering pH levels",
+          "This chemical process impairs calcifying organisms' ability to build shells in polar regions"
+        ],
+        "gaps": [
+          "The specific mechanism of how rising temperatures affect ocean acidification is not explicitly detailed; the context mentions it as a related topic under Cryosphere and Ocean Systems."
+        ],
+        "context_tokens": 1807,
+        "timing": {
+          "embed_s": 0.32,
+          "context_gather_s": 0.02,
+          "synthesize_s": 3.41,
+          "total_s": 3.75
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 3.75
+      },
+      "standalone_2b": {
+        "answer": "Ocean acidification is primarily caused by the absorption of excess carbon dioxide (CO2) from the atmosphere into seawater, which lowers its pH.",
+        "confidence": 0.0,
+        "key_facts": [
+          "It results from increased atmospheric CO2 levels",
+          "This process reduces ocean acidity and harms marine life"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.13
+      },
+      "standalone_9b": {
+        "answer": "...",
+        "confidence": 0.0,
+        "key_facts": [
+          "fact1"
+        ],
+        "gaps": [
+          "missing info"
+        ],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.07
+      },
+      "graph_2b_expand": {
+        "question": "What causes ocean acidification?",
+        "answer": "Ocean acidification occurs when increased atmospheric carbon dioxide dissolves into surface waters to form carbonic acid, which dissociates and lowers ocean pH levels. This chemical process is driven by human activities such as fossil-fuel combustion that have raised global CO2 concentrations from pre-industrial levels.",
+        "confidence": 0.75,
+        "key_facts": [
+          "Increased atmospheric CO\u2082 dissolves into surface waters to form carbonic acid",
+          "This reaction dissociates into bicarbonate and hydrogen ions, lowering ocean pH"
+        ],
+        "gaps": [
+          "The specific human activities (e.g., fossil-fuel combustion) that release this CO2 are mentioned in the context but not detailed as a direct cause of the chemical process itself."
+        ],
+        "context_tokens": 1868,
+        "timing": {
+          "embed_s": 2.46,
+          "context_gather_s": 0.02,
+          "synthesize_s": 10.25,
+          "total_s": 64.22,
+          "gap_fill_s": 51.49
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 64.22
+      },
+      "graph_2b_triad": {
+        "answer": "Ocean acidification is primarily caused by the chemical reaction of atmospheric CO2 with water to form carbonic acid, which increases hydrogen ion concentration and lowers pH. While rising temperatures from fossil fuel emissions (identified as a root cause) drive increased CO2 accumulation in the atmosphere, this temperature itself does not directly lower ocean acidity; rather, it accelerates the rate at which CO2 dissolves into seawater.",
+        "confidence": 0.95,
+        "key_facts": [
+          "CO2 reacts with water to form carbonic acid and hydrogen ions",
+          "Rising temperatures from fossil fuel emissions increase atmospheric CO2 levels"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 9.56,
+        "triad_time_s": 6.61,
+        "verdicts": {
+          "angel": {
+            "assessment": "Angel identifies the root cause as rising temperatures leading to CO2 accumulation in the atmosphere.",
+            "confidence": 0.9,
+            "key_node_ids": [
+              301
+            ],
+            "stance": "for"
+          },
+          "devil": {
+            "assessment": "Devil highlights that while human activities raise CO2 levels (ID:373), the direct chemical driver of acidification is hydrogen ion concentration from carbonic acid formation.",
+            "confidence": 0.9,
+            "key_node_ids": [
+              353
+            ],
+            "stance": "neutral"
+          },
+          "neutral": {
+            "assessment": "The Neutral judge bridges the gap by confirming that while Angel correctly identifies temperature as a primary driver of CO2 buildup (via ID:301), Devil's specific focus on the chemical dissociation mechanism and its direct link to hydrogen ion concentration provides necessary precision.",
+            "confidence": 0.9,
+            "key_node_ids": [
+              375
+            ],
+            "stance": "for",
+            "bridges": [
+              {
+                "from": 301,
+                "to": 373,
+                "explanation": "Angel's node on Climate Modeling/Atmospheric Physics (ID:301) establishes the context of rising CO2 from fossil fuels. Devil's nodes (IDs 353 and 341) provide geopolitical framing regarding global governance frameworks that influence emission pathways."
+              },
+              {
+                "from": 373,
+                "to": 375,
+                "explanation": "Devil explicitly connects the rise in CO2 concentration (ID:373) to the specific chemical reaction described as lowering pH via hydrogen ions (ID:375), validating Angel's broader claim of temperature-driven atmospheric changes."
+              }
+            ]
+          }
+        },
+        "conflicts": [],
+        "edges_created": []
+      }
+    },
+    {
+      "question": "Why did Russia oppose NATO expansion?",
+      "expected_level": 1,
+      "graph_2b": {
+        "question": "Why did Russia oppose NATO expansion?",
+        "answer": "Russia opposes NATO expansion because it perceives the alliance's eastward growth as a direct existential threat to its territorial integrity and sovereignty. This security dilemma is rooted in Russia's strategic narrative that expanding members encircle their borders, violating post-Cold War assurances of non-interference.",
+        "confidence": 0.75,
+        "key_facts": [
+          "Russia views NATO expansion as an existential threat to its territorial integrity and sovereignty",
+          "The security dilemma arises from the strategic reorientation of NATO's eastern flank toward potential Russian military threats"
+        ],
+        "gaps": [
+          "Specific historical instances where Russia explicitly framed enlargement violations, beyond general perception"
+        ],
+        "context_tokens": 1747,
+        "timing": {
+          "embed_s": 0.28,
+          "context_gather_s": 0.01,
+          "synthesize_s": 3.37,
+          "total_s": 3.67
+        },
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 3.67
+      },
+      "standalone_2b": {
+        "answer": "Russia opposed NATO expansion primarily due to historical territorial disputes, fears of encirclement by a military alliance it viewed as hostile, and the strategic threat posed by increased European defense capabilities.",
+        "confidence": 0.0,
+        "key_facts": [
+          "Historical borders were redrawn in 1920 without Soviet consent",
+          "Russia views NATO expansion as an existential security threat"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 3.87
+      },
+      "standalone_9b": {
+        "answer": "<think>\nWe need to produce a concise answer, 2-3 sentences. The output must be JSON with fields: \"answer\", \"key_facts\", and \"gaps\". The question: \"Why did Russia oppose NATO expansion?\" So we need to provide an answer in 2-3 sentences, then list key facts (maybe bullet points) and gaps (missing info). Since the question is straightforward, we can state that Russia opposed NATO expansion because it perceived it as a security threat, undermining its sphere of influence, especially in Eastern Europ",
+        "confidence": 0.0,
+        "key_facts": [],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "time_s": 19.55
+      },
+      "graph_2b_expand": {
+        "question": "Why did Russia oppose NATO expansion?",
+        "answer": "Russia opposed NATO expansion primarily because it viewed the alliance's eastward growth as a direct threat to its territorial integrity and sovereignty, fearing encirclement by Western forces. This security dilemma led Russia to view any new member states or increased military exercises in Eastern Europe as violations of post-Cold War assurances that allowed for free navigation under 'Open Skies'. Consequently, diplomatic tensions escalated significantly after events like the 2016-2022 NATO enlargement and Ukraine's invasion, prompting Moscow to cite these actions as existential threats.",
+        "confidence": 0.75,
+        "key_facts": [
+          "Russia viewed NATO expansion as an existential threat to its territorial integrity",
+          "The security dilemma involved concerns over Russian reaction to increased military exercises near borders following member state additions"
+        ],
+        "gaps": [
+          "Specific details regarding the exact timeline of Russia's objections across different waves of enlargement (e.g., specific dates for each country joining)"
+        ],
+        "context_tokens": 1904,
+        "timing": {
+          "embed_s": 2.82,
+          "context_gather_s": 0.01,
+          "synthesize_s": 9.88,
+          "total_s": 78.19,
+          "gap_fill_s": 65.47
+        },
+        "expanded": true,
+        "nodes_added": 3,
+        "search_fallback": false,
+        "time_s": 78.19
+      },
+      "graph_2b_triad": {
+        "answer": "Russia opposed NATO expansion primarily due to perceived security threats and sovereignty concerns (Angel), which Devil substantiates with specific instances of formal objections, such as Russia's July 2008 protest over Ukraine. While Angel provides the broad geopolitical motivation for this opposition, Neutral confirms that these motivations are not contradicted by Devil's detailed evidence but rather represent a more granular application of those broader principles.",
+        "confidence": 0.95,
+        "key_facts": [
+          "Russia formally objected to NATO enlargement in July 2008 regarding Ukraine",
+          "NATO expansion is perceived as a threat to Russia's sovereignty and security"
+        ],
+        "gaps": [],
+        "context_tokens": 0,
+        "expanded": false,
+        "nodes_added": 0,
+        "search_fallback": false,
+        "time_s": 9.37,
+        "triad_time_s": 6.36,
+        "verdicts": {
+          "angel": {
+            "assessment": "Angel identifies the broad geopolitical motivations behind NATO expansion as perceived threats to Russia but lacks specific evidence of formal objections or security dilemmas.",
+            "confidence": 0.85,
+            "key_node_ids": [
+              16,
+              270
+            ],
+            "stance": "against"
+          },
+          "devil": {
+            "assessment": "Devil highlights concrete instances where Russia formally objected to enlargement and cites specific security dilemmas regarding military exercises.",
+            "confidence": 0.95,
+            "key_node_ids": [
+              376
+            ],
+            "stance": "against"
+          },
+          "neutral": {
+            "assessment": "Neutral stance confirms that while Russia views expansion as a threat (bridged by ID:286), Devil's specific evidence of formal objections and security dilemmas is not contradicted but rather represents the detailed application of Angel's broader thesis.",
+            "confidence": 0.9,
+            "key_node_ids": [
+              154
+            ],
+            "stance": "neutral",
+            "bridges": [
+              {
+                "from": 286,
+                "to": 376,
+                "explanation": "Angel's ID:286 (motivations) is supported by Devil's specific instance of Russia formally objecting to Ukraine in July 2008 (ID:378)."
+              },
+              {
+                "from": 154,
+                "to": 290,
+                "explanation": "Angel's ID:154 regarding sovereignty is bridged by Neutral's specific mention of the 'Open Skies' treaty violations and encirclement narrative (ID:290)."
+              }
+            ]
+          }
+        },
+        "conflicts": [],
+        "edges_created": []
+      }
+    }
+  ]
+}

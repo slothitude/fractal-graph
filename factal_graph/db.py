@@ -2,14 +2,32 @@
 
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from config import settings
+
+
+_MAX_RETRIES = 5
+_BUSY_DELAY = 0.2  # seconds
+
+
+def _retry_commit(conn):
+    """Commit with SQLITE_BUSY retry."""
+    for attempt in range(_MAX_RETRIES):
+        try:
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < _MAX_RETRIES - 1:
+                time.sleep(_BUSY_DELAY * (attempt + 1))
+            else:
+                raise
 
 
 def get_db() -> sqlite3.Connection:
     """Get a SQLite connection, creating the DB and schema if needed."""
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(settings.db_path))
+    conn = sqlite3.connect(str(settings.db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -67,7 +85,7 @@ def insert_node(conn, content, resolution_level=2, parent_id=None,
          json.dumps(bbox) if bbox else None, source_url,
          json.dumps(metadata) if metadata else None, now, now)
     )
-    conn.commit()
+    _retry_commit(conn)
     return cursor.lastrowid
 
 
@@ -119,7 +137,7 @@ def update_node_confidence(conn, node_id: int, confidence: float):
         "UPDATE nodes SET confidence = ?, updated_at = ? WHERE id = ?",
         (confidence, now, node_id)
     )
-    conn.commit()
+    _retry_commit(conn)
 
 
 def update_node_bbox(conn, node_id: int, bbox: list):
@@ -128,7 +146,7 @@ def update_node_bbox(conn, node_id: int, bbox: list):
         "UPDATE nodes SET bbox = ?, updated_at = ? WHERE id = ?",
         (json.dumps(bbox), now, node_id)
     )
-    conn.commit()
+    _retry_commit(conn)
 
 
 def delete_node(conn, node_id: int):
@@ -137,7 +155,7 @@ def delete_node(conn, node_id: int):
         (node_id, node_id)
     )
     conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
-    conn.commit()
+    _retry_commit(conn)
 
 
 # --- Edge CRUD ---
@@ -168,7 +186,7 @@ def insert_edge(conn, from_node_id, to_node_id, edge_type="related",
          from_node["resolution_level"], to_node["resolution_level"],
          confidence, context, now)
     )
-    conn.commit()
+    _retry_commit(conn)
     return cursor.lastrowid
 
 

@@ -8,7 +8,10 @@ Three expansion mechanisms:
 
 import asyncio
 import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 import db
 from config import settings
@@ -164,7 +167,7 @@ async def fill_gaps(gaps: list[str], question: str,
         )
 
         nodes_data = _parse_json_array(
-            await _mother_generate(prompt, num_predict=512)
+            await _mother_generate(prompt)
         )
         if not nodes_data:
             continue
@@ -306,7 +309,7 @@ async def enrich_topic(question: str, question_type: dict,
         )
 
         nodes_data = _parse_json_array(
-            await _mother_generate(enrich_prompt, num_predict=512)
+            await _mother_generate(enrich_prompt)
         )
         if not nodes_data:
             return {"nodes_created": 0, "nodes": [], "reason": "mother_failed"}
