@@ -1,7 +1,7 @@
 """Distillation pipeline — batch-extract mother model parametric knowledge into graph nodes.
 
 Three-phase architecture avoids VRAM thrashing on OLLAMA_MAX_LOADED_MODELS=1:
-  GENERATE phase — mother loaded once (keep_alive="300"), ~15 calls/domain, no warmup between
+  GENERATE phase — mother loaded once (keep_alive="15s"), ~15 calls/domain, no warmup between
   EMBED phase — embedder loaded once, batch embed all collected nodes
   STORE phase — no model needed, dedup + insert into SQLite + ChromaDB
 
@@ -65,6 +65,21 @@ Return JSON array: [
 Be factual and specific. Each entry should be a self-contained knowledge node."""
 
 
+PROMPT_EXTRACT_FACTS_BATCH = """For the domain "{domain}", extract knowledge nodes for these aspects:
+
+{aspects_list}
+
+For EACH aspect, provide:
+1. 3-5 specific named entities (people, events, places, discoveries)
+2. 3-5 verifiable facts with dates/numbers
+3. 2-3 key relationships
+
+Level meanings: L3=entity, L4=fact, L5=evidence
+
+Return a JSON object with aspect names as keys:
+{{"aspect name": [{{"content": "...", "resolution_level": 3|4|5, "edge_to": "related content (optional)", "edge_type": "type (optional)"}}]}}"""
+
+
 PROMPT_SCAFFOLD = """Given these extracted knowledge nodes from domain "{domain}":
 
 {compressed_nodes}
@@ -113,7 +128,7 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
     """Distill all mother model knowledge about one domain into graph nodes.
 
     Three phases:
-    1. GENERATE — mother stays hot (keep_alive="300"), ~12-15 calls
+    1. GENERATE — mother stays hot (keep_alive="15s"), ~12-15 calls
     2. EMBED — batch embed all collected nodes
     3. STORE — dedup + insert into SQLite + ChromaDB
 
@@ -121,7 +136,7 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
         {domain, nodes_created, edges_created, phase_times}
     """
     t0 = time.time()
-    model = model or mother_model or settings.mother_model
+    m = mother_model or settings.mother_model
     conn = db.get_db()
     collected = []  # list of dicts: content, resolution_level, edge_to, edge_type
     edges_to_create = []
@@ -129,10 +144,10 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
     # === PHASE 1: GENERATE (mother hot) ===
     gen_start = time.time()
 
-    # Step 1: Decompose aspects (1 call)
+    # Step 1: Decompose aspects (1 call) — also serves as warmup (first call loads model)
     aspects_raw = await _mother_generate_keepalive(
         PROMPT_DECOMPOSE_ASPECTS.format(domain=domain),
-        keep_alive="300", model=mother_model
+        keep_alive="15s", model=m
     )
     aspects = _parse_json_array(aspects_raw)
     print(f"    Aspects: {len(aspects)}")
@@ -144,7 +159,7 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
             continue
         facts_raw = await _mother_generate_keepalive(
             PROMPT_EXTRACT_FACTS.format(domain=domain, aspect=aspect_name),
-            keep_alive="300", model=mother_model
+            keep_alive="15s", model=m
         )
         nodes = _parse_json_array(facts_raw)
         for node in nodes:
@@ -168,14 +183,14 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
                 domain=domain,
                 compressed_nodes=_compress_nodes(collected)
             ),
-            keep_alive="300", model=mother_model
+            keep_alive="15s", model=m
         )
         scaffold = _parse_json_object(scaffold_raw)
 
-        if scaffold:
+        if scaffold and isinstance(scaffold, dict):
             # L0 domain node
             domain_entry = scaffold.get("domain", {})
-            if domain_entry.get("content"):
+            if isinstance(domain_entry, dict) and domain_entry.get("content"):
                 collected.append({
                     "content": domain_entry["content"],
                     "resolution_level": 0,
@@ -184,7 +199,7 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
             # L1 topic nodes
             topic_nodes = scaffold.get("topics", [])
             for topic in topic_nodes:
-                if topic.get("content"):
+                if isinstance(topic, dict) and topic.get("content"):
                     collected.append({
                         "content": topic["content"],
                         "resolution_level": 1,
@@ -193,7 +208,7 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
             print(f"    Scaffold: L0 + {len(topic_nodes)} L1 topics")
 
     # Step 4: Unload mother
-    await _mother_generate_keepalive(".", keep_alive="0", model=mother_model)
+    await _mother_generate_keepalive(".", keep_alive="0", model=m)
     gen_time = round(time.time() - gen_start, 1)
 
     if not collected:
@@ -201,10 +216,15 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
                 "phase_times": {"generate": gen_time, "embed": 0, "store": 0},
                 "error": "No nodes generated"}
 
-    # === PHASE 2: EMBED (batch) ===
+    # === PHASE 2: EMBED (batch, groups of 5) ===
     embed_start = time.time()
     texts = [n["content"] for n in collected]
-    embeddings = await embed_batch_parallel(texts)
+    embeddings = []
+    for i in range(0, len(texts), 20):
+        batch = texts[i:i+5]
+        print(f"    Embedding batch {i//5+1}/{(len(texts)-1)//5+2} ({len(batch)} nodes)...")
+        batch_embs = await embed_batch_parallel(batch)
+        embeddings.extend(batch_embs)
     embed_time = round(time.time() - embed_start, 1)
 
     # === PHASE 3: STORE (dedup + insert) ===
@@ -257,11 +277,25 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
                 "edge_type": edge_type,
             })
 
-    # Create cross-reference edges (where both nodes exist)
+    # Create cross-reference edges (batch embed targets, groups of 5)
+    if edges_to_create:
+        print(f"    Resolving {len(edges_to_create)} cross-reference edges...")
+        edge_targets = [e["target_content"] for e in edges_to_create]
+        target_texts = list(dict.fromkeys(edge_targets))  # dedup
+        target_embeddings = []
+        for i in range(0, len(target_texts), 5):
+            batch = target_texts[i:i+5]
+            batch_embs = await embed_batch_parallel(batch)
+            target_embeddings.extend(batch_embs)
+
+        target_text_to_emb = dict(zip(target_texts, target_embeddings))
+    else:
+        target_text_to_emb = {}
+
     for edge_info in edges_to_create:
         source_id = content_to_id.get(edge_info["source_content"])
-        # Try to find target in existing graph
-        target_emb = await embed(edge_info["target_content"])
+        # Use batched target embedding
+        target_emb = target_text_to_emb.get(edge_info["target_content"])
         all_hits = query_all_levels(target_emb, n_results=1)
         target_id = None
         for level_hits in all_hits.values():

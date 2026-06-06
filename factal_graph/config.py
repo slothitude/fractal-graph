@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # Mother model for intelligent seeding (larger, slower, smarter)
     mother_url: str = "http://100.84.161.63:11434"
-    mother_model: str = "lfm2.5:latest"
+    mother_model: str = "lfm2.5:gpu3"
 
     # Server
     server_port: int = 8018

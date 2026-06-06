@@ -139,7 +139,7 @@ def _parse_json_array(text: str) -> list[dict]:
         except json.JSONDecodeError:
             pass
 
-    print(f"WARNING: Could not parse JSON from mother model output: {text[:200]}")
+    print(f"WARNING: Could not parse JSON from mother model output: {text[:200].encode('ascii','replace').decode()}")
     return []
 
 
@@ -179,7 +179,7 @@ LEVEL_MEANINGS = {
 
 # --- Core seeding functions ---
 
-async def _mother_generate_keepalive(prompt: str, keep_alive: str = "300",
+async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
                                      model: str = None) -> str:
     """Mother call with configurable keep_alive. For batch generation.
 
@@ -190,32 +190,12 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "300",
     model = model or settings.mother_model
     url = settings.mother_url
 
-    # Warmup: trigger load and poll until ready
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            await client.post(
-                f"{url}/api/chat",
-                json={"model": model,
-                      "messages": [{"role": "user", "content": "."}],
-                      "stream": False,
-                      "options": {"num_predict": 1}},
-            )
-    except Exception:
-        pass
-    for _ in range(120):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{url}/api/ps")
-                models = resp.json().get("models", [])
-                if any(m["name"] == model for m in models):
-                    break
-        except Exception:
-            pass
-        await asyncio.sleep(1.0)
+    # No warmup polling — caller is responsible for keeping model hot
+    # (warmup only in _mother_generate for single fire-and-forget calls)
 
     # Use /api/chat with configurable keep_alive
     for attempt in range(2):
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 f"{url}/api/chat",
                 json={
@@ -223,7 +203,7 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "300",
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "keep_alive": keep_alive,
-                    "options": {"temperature": 0.3},
+                    "options": {"temperature": 0.3, "num_predict": 4096},
                 },
             )
             resp.raise_for_status()
