@@ -1,6 +1,6 @@
 """2B reasoning engine — LaRQL INFER equivalent.
 
-Where "2B speed + 9B quality" is realized. The 2B model doesn't need to
+Where "2B speed + ~8B quality" is realized. The 2B model doesn't need to
 KNOW facts — it reasons over structured graph context provided by context.py.
 Factual correctness comes from the graph, coherence from the 2B.
 """
@@ -86,7 +86,6 @@ async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,
                     "keep_alive": "30s",
                     "options": {
                         "temperature": 0.2,
-                        "num_predict": num_predict,
                     },
                     "think": False,
                 },

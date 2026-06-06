@@ -3,7 +3,7 @@
 Modes:
   1. 2B + graph context (our pipeline)
   2. 2B standalone (no graph, just the question)
-  3. 9B standalone (no graph, just the question)
+  3. Mother standalone (~8B, no graph, just the question)
   4. 2B + graph + auto_expand (full expansion pipeline)
   5. 2B + graph + judge triad (two-pass Angel/Devil/Neutral)
 
@@ -128,7 +128,7 @@ async def _call_2b_standalone(question: str) -> dict:
                 ),
                 "stream": False,
                 "keep_alive": "0",
-                "options": {"temperature": 0.2, "num_predict": 256},
+                "options": {"temperature": 0.2},
                 "think": False,
             },
         )
@@ -147,8 +147,13 @@ async def _call_2b_standalone(question: str) -> dict:
     }
 
 
-async def _call_9b_standalone(question: str) -> dict:
-    """Mode 3: 9B standalone — no graph context."""
+async def _call_mother_standalone(question: str) -> dict:
+    """Mode 3: Mother standalone (~8B) — no graph context.
+
+    Uses /api/generate with format:json — lfm2.5 is a thinking model that
+    ignores think:false and burns all tokens on <think > blocks. format:json
+    forces clean JSON output without thinking tag wrapping.
+    """
     import httpx
     t0 = time.time()
     await _warmup(settings.mother_model, settings.mother_url)
@@ -166,8 +171,8 @@ async def _call_9b_standalone(question: str) -> dict:
                 ),
                 "stream": False,
                 "keep_alive": "0",
-                "options": {"temperature": 0.2, "num_predict": 256},
-                "think": False,
+                "format": "json",
+                "options": {"temperature": 0.2},
             },
         )
         resp.raise_for_status()
@@ -283,13 +288,13 @@ async def run_bench():
             entry["standalone_2b"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
             print(f"       ERROR: {e}")
 
-        # Mode 3: 9B standalone
-        print("  [3/5] 9B standalone...")
+        # Mode 3: Mother standalone
+        print("  [3/5] Mother standalone...")
         try:
-            entry["standalone_9b"] = await _call_9b_standalone(q)
-            print(f"       {_fmt_mode(entry['standalone_9b'])}")
+            entry["standalone_mother"] = await _call_mother_standalone(q)
+            print(f"       {_fmt_mode(entry['standalone_mother'])}")
         except Exception as e:
-            entry["standalone_9b"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
+            entry["standalone_mother"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
             print(f"       ERROR: {e}")
 
         # Mode 4: 2B + graph + auto_expand
@@ -327,7 +332,7 @@ async def run_bench():
         for mode_key, label in [
             ("graph_2b", "2B+Gr"),
             ("standalone_2b", "2B"),
-            ("standalone_9b", "9B"),
+            ("standalone_mother", "Mom"),
             ("graph_2b_expand", "2B+Ex"),
             ("graph_2b_triad", "2B+Tr"),
         ]:
@@ -355,7 +360,7 @@ async def run_bench():
     MODES = [
         ("graph_2b", "2B+Graph"),
         ("standalone_2b", "2B alone"),
-        ("standalone_9b", "9B alone"),
+        ("standalone_mother", "Mother alone"),
         ("graph_2b_expand", "2B+Graph+Expand"),
         ("graph_2b_triad", "2B+Graph+Triad"),
     ]
@@ -408,5 +413,83 @@ async def run_bench():
     print(f"History appended to {history_path}")
 
 
+async def run_distill_compare(distill_domain: str = None):
+    """Run bench before and after distilling a domain, show delta."""
+    from distill import distill_domain as distill_fn
+
+    print("=" * 70)
+    print("BEFORE DISTILLATION")
+    print("=" * 70)
+    before_results = await _run_bench_inner()
+
+    if distill_domain:
+        print(f"\n{'='*70}")
+        print(f"DISTILLING: {distill_domain}")
+        print(f"{'='*70}")
+        distill_result = await distill_fn(distill_domain)
+        print(f"  Nodes created: {distill_result.get('nodes_created', 0)}")
+        print(f"  Edges created: {distill_result.get('edges_created', 0)}")
+        pt = distill_result.get("phase_times", {})
+        print(f"  Time: gen={pt.get('generate', '?')}s embed={pt.get('embed', '?')}s store={pt.get('store', '?')}s")
+
+    print(f"\n{'='*70}")
+    print("AFTER DISTILLATION")
+    print("=" * 70)
+    after_results = await _run_bench_inner()
+
+    # Print comparison
+    print(f"\n{'='*70}")
+    print("BEFORE vs AFTER (2B+Graph mode only)")
+    print(f"{'='*70}")
+    print(f"{'Question':<40} {'Before':>6} {'After':>6} {'Delta':>6}")
+    print("-" * 62)
+
+    for before, after in zip(before_results, after_results):
+        q = before["question"][:38] + "..."
+        b_conf = before.get("graph_2b", {}).get("confidence", 0.0)
+        a_conf = after.get("graph_2b", {}).get("confidence", 0.0)
+        delta = a_conf - b_conf
+        sign = "+" if delta >= 0 else ""
+        b_str = f"{b_conf:.2f}" if b_conf else "  -"
+        a_str = f"{a_conf:.2f}" if a_conf else "  -"
+        d_str = f"{sign}{delta:.2f}" if (b_conf or a_conf) else "  -"
+        print(f"{q:<40} {b_str:>6} {a_str:>6} {d_str:>6}")
+
+    # Save comparison
+    run_timestamp = datetime.now(timezone.utc).isoformat()
+    comp_data = {
+        "timestamp": run_timestamp,
+        "distill_domain": distill_domain,
+        "before": before_results,
+        "after": after_results,
+    }
+    comp_path = RESULTS_DIR / "bench_distill_compare.json"
+    with open(comp_path, "w") as f:
+        json.dump(comp_data, f, indent=2, default=str)
+    print(f"\nComparison saved to {comp_path}")
+
+
+async def _run_bench_inner() -> list[dict]:
+    """Run bench and return results list (without printing table)."""
+    results = []
+    for test in TEST_QUESTIONS:
+        q = test["q"]
+        entry = {"question": q, "expected_level": test["expected_level"]}
+        try:
+            entry["graph_2b"] = await _call_2b_graph(q, auto_expand=False)
+        except Exception as e:
+            entry["graph_2b"] = {"confidence": 0.0, "error": str(e)}
+        results.append(entry)
+    return results
+
+
 if __name__ == "__main__":
-    asyncio.run(run_bench())
+    import sys
+    if "--distill" in sys.argv:
+        domain = None
+        idx = sys.argv.index("--distill")
+        if idx + 1 < len(sys.argv):
+            domain = sys.argv[idx + 1]
+        asyncio.run(run_distill_compare(distill_domain=domain))
+    else:
+        asyncio.run(run_bench())

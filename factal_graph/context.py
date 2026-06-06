@@ -261,7 +261,7 @@ def walk_graph(node_id: int, max_hops: int = 3,
 
 
 def find_best_level_by_structure(embedding: list[float]) -> int:
-    """Place text in graph using bbox containment — replaces 9B escalation.
+    """Place text in graph using bbox containment — replaces mother escalation.
 
     Walks from L0 down, checking if the embedding falls within each
     node's bounding box. Returns the deepest level where containment

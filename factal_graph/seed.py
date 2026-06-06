@@ -1,6 +1,6 @@
 """Mother model seeding pipeline — intelligent knowledge graph population.
 
-Uses a larger LLM (e.g. qwen3.5:9b) to generate structured multi-resolution
+Uses a larger LLM (e.g. lfm2.5:latest, ~8B) to generate structured multi-resolution
 node hierarchies with cross-resolution edges and bounding boxes.
 """
 
@@ -33,7 +33,11 @@ from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
 # --- Mother model LLM calls ---
 
 async def _mother_generate(prompt: str, model: str = None) -> str:
-    """Call the mother model (larger LLM) for structured generation."""
+    """Call the mother model (larger LLM) for structured generation.
+
+    Retries once on empty response or JSON parse failure.
+    Uses keep_alive=0 to free VRAM immediately for 2B model.
+    """
     model = model or settings.mother_model
     url = settings.mother_url
 
@@ -63,22 +67,34 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
     # Use /api/chat — lfm2-thinking parser auto-separates thinking into .thinking field
     # No "format": "json" needed — it causes lfm2.5 to drain tokens on thinking with empty content
     # No "think": False — it breaks lfm2-thinking parser and leaks raw tags
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            f"{url}/api/chat",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "keep_alive": "30s",
-                "options": {"temperature": 0.3},
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if "message" in data:
-            return data["message"].get("content", "").strip()
-        return data.get("content", "").strip()
+    # keep_alive=0 — free VRAM immediately so 2B can load during auto-expand
+    for attempt in range(2):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "keep_alive": "0",
+                    "options": {"temperature": 0.3},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = ""
+            if "message" in data:
+                content = data["message"].get("content", "").strip()
+            else:
+                content = data.get("content", "").strip()
+
+            if content:
+                return content
+
+            if attempt == 0:
+                logger.warning("Mother model returned empty response, retrying...")
+
+    return ""
 
 
 def _parse_json_array(text: str) -> list[dict]:
@@ -162,6 +178,70 @@ LEVEL_MEANINGS = {
 
 
 # --- Core seeding functions ---
+
+async def _mother_generate_keepalive(prompt: str, keep_alive: str = "300",
+                                     model: str = None) -> str:
+    """Mother call with configurable keep_alive. For batch generation.
+
+    Same warmup + retry logic as _mother_generate but passes through
+    the keep_alive parameter so the mother stays hot between calls.
+    Use keep_alive="0" after the last call in a batch to unload.
+    """
+    model = model or settings.mother_model
+    url = settings.mother_url
+
+    # Warmup: trigger load and poll until ready
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            await client.post(
+                f"{url}/api/chat",
+                json={"model": model,
+                      "messages": [{"role": "user", "content": "."}],
+                      "stream": False,
+                      "options": {"num_predict": 1}},
+            )
+    except Exception:
+        pass
+    for _ in range(120):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{url}/api/ps")
+                models = resp.json().get("models", [])
+                if any(m["name"] == model for m in models):
+                    break
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
+    # Use /api/chat with configurable keep_alive
+    for attempt in range(2):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "keep_alive": keep_alive,
+                    "options": {"temperature": 0.3},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = ""
+            if "message" in data:
+                content = data["message"].get("content", "").strip()
+            else:
+                content = data.get("content", "").strip()
+
+            if content:
+                return content
+
+            if attempt == 0:
+                logger.warning("Mother model returned empty response, retrying...")
+
+    return ""
+
 
 async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
                     confidence: float = 0.7) -> dict:

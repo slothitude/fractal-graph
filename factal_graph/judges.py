@@ -133,7 +133,7 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
     )
 
     # Uses _llm_call from reasoning.py — warmup cache + keep_alive:30s
-    raw = await _llm_call(triad_prompt, num_predict=2048)
+    raw = await _llm_call(triad_prompt)
     parsed = _parse_json(raw)
 
     if not parsed:
@@ -250,7 +250,7 @@ async def judge_answer(topic: str, judge_result: dict) -> dict:
         "}\n"
     )
 
-    raw = await _llm_call(prompt, num_predict=512)
+    raw = await _llm_call(prompt)
     parsed = _parse_json(raw)
 
     if parsed and "answer" in parsed:

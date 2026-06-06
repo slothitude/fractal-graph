@@ -5,9 +5,9 @@ import json
 import db
 import graph
 from config import settings
-from ingest import web_ingest as web_ingest_fn, ingest_url as ingest_url_fn
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
+from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
 from reasoning import answer as answer_fn
 from growth import curiosity_scan as curiosity_scan_fn
@@ -24,14 +24,14 @@ mcp = FastMCP("fractal-graph")
 async def web_ingest(query: str, max_urls: int = 3) -> str:
     """Search the web and ingest results into the fractal knowledge graph.
 
-    Searches SearXNG, extracts content from top URLs, classifies into
-    resolution levels, inserts nodes + edges, and indexes embeddings.
+    Uses the mother model to extract, classify, structure, and create nodes
+    with proper hierarchy. Two-pass: L3-L5 extraction then L0-L2 scaffolding.
 
     Args:
         query: Search query to find content
         max_urls: Maximum URLs to process (default 3)
     """
-    result = await web_ingest_fn(query, max_urls)
+    result = await seed_from_search_fn(query, max_urls=max_urls)
     return json.dumps(result, indent=2, default=str)
 
 
@@ -103,15 +103,17 @@ async def add_edge(from_node_id: int, to_node_id: int,
 
 @mcp.tool()
 async def ingest_url(url: str) -> str:
-    """Fetch a URL and auto-classify its content into the knowledge graph.
+    """Fetch a URL and ingest via the mother model into the knowledge graph.
 
-    Long content is split into chunks, each classified and indexed separately.
+    Uses the domain from the URL as a search query to find related content,
+    then seeds structured nodes via the mother model (two-pass extraction).
 
     Args:
         url: URL to fetch and ingest
     """
-    conn = db.get_db()
-    result = await ingest_url_fn(conn, url)
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc.replace("www.", "")
+    result = await seed_from_search_fn(domain, max_urls=3)
     return json.dumps(result, indent=2, default=str)
 
 
@@ -130,7 +132,7 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None) -> st
     Args:
         topic: Topic to seed (e.g. "NATO expansion", "quantum computing")
         depth: Maximum resolution depth (1-5, default 3)
-        mother_model: Override mother model (default: qwen3.5:9b)
+        mother_model: Override mother model (default: lfm2.5:latest, ~8B)
     """
     result = await seed_topic_fn(topic, depth=depth, mother_model=mother_model)
     return json.dumps(result, indent=2, default=str)
@@ -148,7 +150,7 @@ async def seed_from_search(query: str, max_urls: int = 5,
     Args:
         query: Search query
         max_urls: Maximum URLs to process (default 5)
-        mother_model: Override mother model (default: qwen3.5:9b)
+        mother_model: Override mother model (default: lfm2.5:latest, ~8B)
     """
     result = await seed_from_search_fn(query, max_urls=max_urls,
                                        mother_model=mother_model)
@@ -164,7 +166,7 @@ async def seed_expand(node_id: int, mother_model: str = None) -> str:
 
     Args:
         node_id: Node ID to expand
-        mother_model: Override mother model (default: qwen3.5:9b)
+        mother_model: Override mother model (default: lfm2.5:latest, ~8B)
     """
     result = await seed_expand_fn(node_id, mother_model=mother_model)
     return json.dumps(result, indent=2, default=str)
@@ -182,6 +184,58 @@ async def curiosity_scan(max_expansions: int = settings.curiosity_max_expansions
         max_expansions: Maximum nodes to expand per scan (default 3)
     """
     result = await curiosity_scan_fn(max_expansions=max_expansions)
+    return json.dumps(result, indent=2, default=str)
+
+
+# ============================================================
+# Distillation — Mother Model Knowledge Extraction
+# ============================================================
+
+@mcp.tool()
+async def distill_topic(topic: str, mother_model: str = "") -> str:
+    """Distill mother model knowledge about a topic into graph nodes.
+
+    Extracts entities, facts, evidence, and relationships from the mother
+    model's parametric knowledge and stores them as structured graph nodes.
+    Uses keep_alive to keep mother hot during generation, then batch embeds.
+
+    Args:
+        topic: Topic to distill (e.g. "quantum computing", "Roman Empire")
+        mother_model: Override mother model (default: lfm2.5:latest)
+    """
+    model = mother_model or None
+    result = await distill_domain_fn(topic, mother_model=model)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def distill_domains(domains: str = "", mother_model: str = "") -> str:
+    """Distill multiple domains. Comma-separated list or empty for all.
+
+    If domains is empty, asks the mother to enumerate all knowledge domains
+    first (~25-30), then distills each one sequentially.
+
+    Each domain takes ~2 min (15 LLM calls with mother hot, then batch embed).
+    Total: ~60 min for all ~30 domains, ~9-15K nodes.
+
+    Args:
+        domains: Comma-separated domain list (empty = enumerate all)
+        mother_model: Override mother model (default: lfm2.5:latest)
+    """
+    model = mother_model or None
+    domain_list = [d.strip() for d in domains.split(",") if d.strip()] if domains else None
+    result = await distill_all_fn(domains=domain_list, mother_model=model)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def distill_coverage() -> str:
+    """Show graph coverage — nodes per level, shallow branches, gaps.
+
+    Returns statistics about graph depth, identifies domains that lack
+    deep resolution coverage, and lists L0 domains with their children.
+    """
+    result = distill_coverage_fn()
     return json.dumps(result, indent=2, default=str)
 
 
@@ -295,7 +349,7 @@ async def ask(question: str, auto_expand: bool = True) -> str:
 
     The core user-facing tool. The 2B model reasons over structured graph
     context (not recall). Pipeline: embed -> classify (2B) -> gather context
-    -> synthesize answer (2B). ~5-8s, 2B only, no 9B touched.
+    -> synthesize answer (2B). ~5-8s, 2B only, no mother touched.
 
     When auto_expand is True and confidence is low, the mother model fills
     knowledge gaps then re-answers with richer context.
