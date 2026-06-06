@@ -123,47 +123,57 @@ async def query(prompt: str, resolution_hint: int = None, top_k: int = 5) -> dic
 
 async def _drill_down(vec: list[float], start_nodes: list[dict],
                       target_resolution: int, top_k: int = 5) -> list[dict]:
-    """Drill down from coarse nodes to target resolution."""
+    """Drill down from coarse nodes to target resolution.
+
+    Walks children of each hit node (not the entire next level) and
+    supplements with vector similarity at the target level.
+    """
     path = []
     current_level = 0
     current_hits = start_nodes
+    conn = db.get_db()
 
     while current_level < target_resolution:
         next_level = current_level + 1
         next_hits = []
 
-        conn = db.get_db()
         for hit in current_hits:
             node_id = int(hit["node_id"])
 
-            # Search the next level by vector similarity
-            level_hits = query_level(vec, next_level, n_results=top_k)
-            next_hits.extend(level_hits)
-
-            # Add children whose bbox contains the query vec
+            # Walk children of this specific node (hierarchy-aware)
             children = db.get_children(conn, node_id)
             for child in children:
-                if child.get("bbox") and point_in_bbox(vec, child["bbox"]):
-                    next_hits.append({
-                        "node_id": str(child["id"]),
-                        "content": child["content"],
-                        "distance": 0.0,
-                        "metadata": {
-                            "resolution_level": child["resolution_level"],
-                            "confidence": child["confidence"],
-                        },
-                    })
+                entry = {
+                    "node_id": str(child["id"]),
+                    "content": child["content"],
+                    "distance": 0.0 if (child.get("bbox") and point_in_bbox(vec, child["bbox"])) else 0.5,
+                    "metadata": {
+                        "resolution_level": child["resolution_level"],
+                        "confidence": child["confidence"],
+                    },
+                }
+                next_hits.append(entry)
+
+        # Supplement with vector search at next level (for nodes without children)
+        if not next_hits or current_level == target_resolution - 1:
+            level_hits = query_level(vec, next_level, n_results=top_k)
+            existing_ids = {h["node_id"] for h in next_hits}
+            for h in level_hits:
+                if h["node_id"] not in existing_ids:
+                    next_hits.append(h)
 
         if not next_hits:
             break
 
-        # Deduplicate
+        # Deduplicate and rank
         seen = set()
         unique = []
         for h in next_hits:
             if h["node_id"] not in seen:
                 seen.add(h["node_id"])
                 unique.append(h)
+
+        unique.sort(key=lambda x: x.get("distance", 0.5))
 
         path.append({"level": current_level, "nodes": current_hits})
         current_hits = unique[:top_k]

@@ -52,10 +52,10 @@ def classify_resolution_heuristic(text: str) -> int:
 
 
 async def classify_resolution_llm(text: str) -> int:
-    """Classify text using LLM on Lappy. Escalates to mother if low confidence.
+    """Classify text using 2B LLM + graph structure fallback.
 
-    Returns (resolution_level, confidence) where confidence indicates
-    how reliable the classification is.
+    No longer escalates to 9B mother model. Uses 2B classification first,
+    then graph bbox containment for uncertain cases.
     """
     result = await _classify_with_model(
         settings.llm_url, settings.llm_model, text, timeout=15.0
@@ -66,13 +66,15 @@ async def classify_resolution_llm(text: str) -> int:
 
     level, confidence = result
 
-    # Escalate to mother if 2B classifier is uncertain
+    # Use graph structure instead of 9B escalation for uncertain cases
     if confidence < 0.7:
-        mother_result = await _classify_with_model(
-            settings.mother_url, settings.mother_model, text, timeout=60.0
-        )
-        if mother_result is not None:
-            return mother_result[0]
+        try:
+            from context import find_best_level_by_structure
+            from embedder import embed
+            embedding = await embed(text)
+            return find_best_level_by_structure(embedding)
+        except Exception:
+            pass  # Fall through to 2B's answer
 
     return level
 

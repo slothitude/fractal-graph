@@ -64,4 +64,12 @@ async def embed_batch_parallel(texts: list[str], batch_size: int = 10) -> list[l
 def embed_sync(text: str) -> list[float]:
     """Synchronous embed for use in sync contexts."""
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(embed(text))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, embed(text)).result()
+    return asyncio.run(embed(text))

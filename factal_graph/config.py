@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # Server
     server_port: int = 8018
 
+    # Token budgets for 2B reasoning pipeline
+    max_context_tokens: int = 2048
+    max_answer_tokens: int = 512
+
     model_config = {"env_prefix": "FRACTAL_"}
 
 

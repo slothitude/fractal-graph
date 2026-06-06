@@ -9,6 +9,7 @@ from ingest import web_ingest as web_ingest_fn, ingest_url as ingest_url_fn
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
 from judges import judge_topic as judge_topic_fn
+from reasoning import answer as answer_fn
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("fractal-graph")
@@ -262,6 +263,25 @@ async def get_node(node_id: int) -> str:
         "children": children,
         "edges": edges,
     }, indent=2, default=str)
+
+
+# ============================================================
+# Ask — 2B Reasoning Pipeline
+# ============================================================
+
+@mcp.tool()
+async def ask(question: str) -> str:
+    """Ask a question and get an answer from the 2B reasoning engine.
+
+    The core user-facing tool. The 2B model reasons over structured graph
+    context (not recall). Pipeline: embed -> classify (2B) -> gather context
+    -> synthesize answer (2B). ~5-8s, 2B only, no 9B touched.
+
+    Args:
+        question: Your question (e.g. "Why did Russia oppose NATO expansion?")
+    """
+    result = await answer_fn(question)
+    return json.dumps(result, indent=2, default=str)
 
 
 # ============================================================
