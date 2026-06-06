@@ -303,13 +303,8 @@ async def answer(question: str, auto_expand: bool = True,
             and (conf < settings.auto_expand_threshold or len(gaps) > 0)
             and _round < settings.max_expansion_rounds):
 
-        # Fire-and-forget enrichment (non-blocking) — only on first round
-        if _round == 0:
-            asyncio.ensure_future(
-                _background_enrich(question, question_type)
-            )
-
-        # Synchronous gap fill
+        # Synchronous gap fill (this IS the enrichment — no background task
+        # because with keep_alive=0 only one model fits in VRAM at a time)
         from growth import fill_gaps
         fill_result = await fill_gaps(
             gaps, question, max_nodes=settings.max_gap_fill_nodes,
