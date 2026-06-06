@@ -144,7 +144,8 @@ def delete_node(conn, node_id: int):
 
 EDGE_TYPES = {
     "related", "refines", "contradicts", "exemplifies",
-    "generalizes", "challenges", "supports", "derived_from"
+    "generalizes", "challenges", "supports", "derived_from",
+    "resolution_conflict",
 }
 
 

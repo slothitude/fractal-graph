@@ -42,14 +42,14 @@ def get_subtree(conn, node_id: int, max_depth: int = 10) -> dict | None:
 
 
 def find_contradictions(conn) -> list[dict]:
-    """Find all CONTRADICTS and CHALLENGES edges with full node context."""
+    """Find all CONTRADICTS, CHALLENGES, and RESOLUTION_CONFLICT edges with full node context."""
     rows = conn.execute(
         """SELECT e.*, nf.content as from_content, nf.resolution_level as from_level,
                   nt.content as to_content, nt.resolution_level as to_level
            FROM edges e
            JOIN nodes nf ON e.from_node_id = nf.id
            JOIN nodes nt ON e.to_node_id = nt.id
-           WHERE e.edge_type IN ('contradicts', 'challenges')"""
+           WHERE e.edge_type IN ('contradicts', 'challenges', 'resolution_conflict')"""
     ).fetchall()
     return [dict(row) for row in rows]
 

@@ -8,6 +8,7 @@ from config import settings
 from ingest import web_ingest as web_ingest_fn, ingest_url as ingest_url_fn
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
+from judges import judge_topic as judge_topic_fn
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("fractal-graph")
@@ -80,7 +81,8 @@ async def add_edge(from_node_id: int, to_node_id: int,
         from_node_id: Source node ID
         to_node_id: Target node ID
         edge_type: Edge type — related, refines, contradicts, exemplifies,
-                  generalizes, challenges, supports, derived_from
+                  generalizes, challenges, supports, derived_from,
+                  resolution_conflict
         confidence: Edge confidence 0.0-1.0
         context: Description of the relationship (optional)
     """
@@ -163,6 +165,30 @@ async def seed_expand(node_id: int, mother_model: str = None) -> str:
         mother_model: Override mother model (default: qwen3.5:9b)
     """
     result = await seed_expand_fn(node_id, mother_model=mother_model)
+    return json.dumps(result, indent=2, default=str)
+
+
+# ============================================================
+# Judge Triad
+# ============================================================
+
+@mcp.tool()
+async def judge_topic(topic: str, top_k: int = 5) -> str:
+    """Run the Angel/Devil/Neutral judge triad on a topic (batched).
+
+    All three judges query the graph at their native resolution levels,
+    then a single LLM call produces all verdicts + conflict detection.
+    Disagreements are logged as resolution_conflict edges.
+
+    Angel sees the forest (L0-L1, optimistic summaries).
+    Devil sees the trees (L4-L5, adversarial evidence).
+    Neutral bridges the gap (L2-L3, cross-resolution coherence).
+
+    Args:
+        topic: Topic to judge (e.g. "NATO expansion", "climate policy")
+        top_k: Number of nodes to retrieve per resolution level (default 5)
+    """
+    result = await judge_topic_fn(topic, top_k)
     return json.dumps(result, indent=2, default=str)
 
 
@@ -263,7 +289,8 @@ async def get_subtree(node_id: int, max_depth: int = 10) -> str:
 async def find_contradictions() -> str:
     """Find all cross-resolution contradictions in the graph.
 
-    Scans for CONTRADICTS and CHALLENGES edges with full node context.
+    Scans for CONTRADICTS, CHALLENGES, and RESOLUTION_CONFLICT edges
+    with full node context.
     """
     conn = db.get_db()
     contradictions = graph.find_contradictions(conn)
