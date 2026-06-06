@@ -15,6 +15,9 @@ from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
                    cross_link_nodes as cross_link_fn,
                    auto_crosslink as auto_crosslink_fn)
+from quality import (self_consistency_check as consistency_fn,
+                      quality_triad_scan as triad_scan_fn,
+                      source_attribution_pass as source_attrib_fn)
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("fractal-graph")
@@ -300,6 +303,56 @@ async def auto_crosslink(domain_node_id: int = None,
         max_pairs: Maximum node pairs to check (default 20)
     """
     result = await auto_crosslink_fn(domain_node_id, max_pairs)
+    return json.dumps(result, indent=2, default=str)
+
+
+# ============================================================
+# Quality Gate — Consistency, Triad Scan, Source Attribution
+# ============================================================
+
+@mcp.tool()
+async def self_consistency_check(node_id: int, num_rounds: int = 3,
+                                   min_consensus: int = 2) -> str:
+    """Ask mother the same question multiple times, keep only consensus facts.
+
+    For a domain node, asks mother to list facts 3x independently.
+    Facts appearing in 2/3+ rounds are kept; others are demoted.
+
+    Args:
+        node_id: L0 domain node to check
+        num_rounds: Number of independent rounds (default 3)
+        min_consensus: Minimum rounds a fact must appear in (default 2)
+    """
+    result = await consistency_fn(node_id, num_rounds=num_rounds,
+                                    min_consensus=min_consensus)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def quality_triad_scan(domain_node_id: int = None) -> str:
+    """Run judge triad on L0 domains to catch mother hallucinations.
+
+    Angel sees L0-L1 (overview), Devil sees L4-L5 (evidence).
+    Large confidence gaps indicate overconfidence.
+
+    Args:
+        domain_node_id: Optional L0 domain node (null = all domains)
+    """
+    result = await triad_scan_fn(domain_node_id)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def source_attribution(domain_node_id: int = None) -> str:
+    """Ask mother to attribute sources for facts, demote unattributed ones.
+
+    Checks L4-L5 facts under each domain. Mother rates whether it can
+    cite a specific source. Unattributed facts get lower confidence.
+
+    Args:
+        domain_node_id: Optional L0 domain node (null = all domains)
+    """
+    result = await source_attrib_fn(domain_node_id)
     return json.dumps(result, indent=2, default=str)
 
 

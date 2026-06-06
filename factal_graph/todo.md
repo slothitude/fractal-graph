@@ -77,9 +77,10 @@
 - [x] MCP tools: `enrich_probe`, `enrich_node`, `cross_link`, `auto_crosslink`
 
 ### Phase 9: Quality Gate
-- [ ] Mother self-consistency check: ask same question 3x, only insert facts that appear in 2/3+ responses
-- [ ] Contradiction detection: after distillation, run triad on each L0 to catch mother hallucinations
-- [ ] Source attribution: mother generates "source" hints — mark unattributed facts as lower confidence
+- [x] Mother self-consistency check: ask same question 3x, only insert facts that appear in 2/3+ responses
+- [x] Contradiction detection: after distillation, run triad on each L0 to catch mother hallucinations
+- [x] Source attribution: mother generates "source" hints — mark unattributed facts as lower confidence
+- [x] MCP tools: `self_consistency_check`, `quality_triad_scan`, `source_attribution`
 - [x] Fix FK constraint errors in auto-expand (parent_id validation in insert_node + _write_lock)
 - [x] Fix "database is locked" errors (busy_timeout=30000 + asyncio _write_lock)
 
