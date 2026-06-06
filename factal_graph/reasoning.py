@@ -20,7 +20,7 @@ from context import gather_context, format_context_for_llm
 
 
 async def _warmup_model(model: str, url: str) -> float:
-    """Trigger model load then poll /api/ps until it appears loaded.
+    """Trigger model load with a dummy generate.
 
     Returns:
         Load time in seconds.
@@ -30,7 +30,7 @@ async def _warmup_model(model: str, url: str) -> float:
 
     # Check if model is already loaded (skip dummy generate if so)
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{url}/api/ps")
             if any(m["name"] == model for m in resp.json().get("models", [])):
                 elapsed = round(time.time() - t0, 1)
@@ -41,31 +41,17 @@ async def _warmup_model(model: str, url: str) -> float:
 
     # Kick off a dummy generate to trigger loading
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             await client.post(
                 f"{url}/api/generate",
                 json={"model": model, "prompt": ".", "stream": False,
                       "options": {"num_predict": 1}, "think": False},
             )
     except Exception:
-        pass  # load triggered even if request fails
+        pass
 
-    # Poll until model appears in /api/ps
-    for _ in range(120):  # 120 * 1s = 2 min max
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{url}/api/ps")
-                models = resp.json().get("models", [])
-                if any(m["name"] == model for m in models):
-                    elapsed = round(time.time() - t0, 1)
-                    logger.info("Model %s loaded in %.1fs", model, elapsed)
-                    print(f"         warmup {model}: {elapsed}s")
-                    return elapsed
-        except Exception:
-            pass
-        await asyncio.sleep(1.0)
     elapsed = round(time.time() - t0, 1)
-    logger.warning("Model %s did not load within %.1fs", model, elapsed)
+    print(f"         warmup {model}: {elapsed}s")
     return elapsed
 
 

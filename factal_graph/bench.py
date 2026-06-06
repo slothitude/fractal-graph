@@ -28,7 +28,7 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 
 async def _warmup(model: str, url: str) -> float:
-    """Trigger model load and poll /api/ps until ready.
+    """Trigger model load and wait briefly.
 
     Returns:
         Load time in seconds.
@@ -37,7 +37,7 @@ async def _warmup(model: str, url: str) -> float:
     import time as _time
     t0 = _time.time()
     try:
-        async with _httpx.AsyncClient(timeout=300.0) as client:
+        async with _httpx.AsyncClient(timeout=60.0) as client:
             await client.post(
                 f"{url}/api/generate",
                 json={"model": model, "prompt": ".", "stream": False,
@@ -45,19 +45,8 @@ async def _warmup(model: str, url: str) -> float:
             )
     except Exception:
         pass
-    for _ in range(120):
-        try:
-            async with _httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{url}/api/ps")
-                if any(m["name"] == model for m in resp.json().get("models", [])):
-                    elapsed = round(_time.time() - t0, 1)
-                    print(f"         warmup {model}: {elapsed}s")
-                    return elapsed
-        except Exception:
-            pass
-        await asyncio.sleep(1.0)
     elapsed = round(_time.time() - t0, 1)
-    print(f"         warmup {model}: {elapsed}s (timeout)")
+    print(f"         warmup {model}: {elapsed}s")
     return elapsed
 
 TEST_QUESTIONS = [

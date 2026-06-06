@@ -41,9 +41,9 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
     model = model or settings.mother_model
     url = settings.mother_url
 
-    # Warmup: trigger load and poll until ready
+    # Warmup: trigger load
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             await client.post(
                 f"{url}/api/chat",
                 json={"model": model,
@@ -53,16 +53,6 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
             )
     except Exception:
         pass
-    for _ in range(120):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{url}/api/ps")
-                models = resp.json().get("models", [])
-                if any(m["name"] == model for m in models):
-                    break
-        except Exception:
-            pass
-        await asyncio.sleep(1.0)
 
     # Use /api/chat — lfm2-thinking parser auto-separates thinking into .thinking field
     # No "format": "json" needed — it causes lfm2.5 to drain tokens on thinking with empty content
