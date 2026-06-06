@@ -50,7 +50,10 @@ Pipeline: User Question -> Embed+Retrieve -> Gather Context -> Classify (2B) -> 
 ### Phase 5: Server + Benchmark
 - [x] Add `ask(question) -> str` MCP tool to factal_server.py — primary user-facing tool
 - [x] Create bench.py — compare 2B+graph vs 9B standalone vs 2B standalone
-- [ ] Test: `ask("Why did Russia oppose NATO expansion?")` via MCP
+- [x] Test: `ask("Why did Russia oppose NATO expansion?")` via MCP — works, 4.64s, conf 0.75
+- [x] Fix query_graph top_k→n_results param mismatch
+- [x] Fix ChromaDB concurrent access corruption (fresh client per query_all_levels)
+- [x] Commit and push as `077578a`
 - [ ] Verify seed_topic still works (9B untouched)
 - [ ] Verify web_ingest no longer escalates to 9B
 
