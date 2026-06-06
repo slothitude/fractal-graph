@@ -79,8 +79,8 @@
 - [ ] Mother self-consistency check: ask same question 3x, only insert facts that appear in 2/3+ responses
 - [ ] Contradiction detection: after distillation, run triad on each L0 to catch mother hallucinations
 - [ ] Source attribution: mother generates "source" hints — mark unattributed facts as lower confidence
-- [ ] Fix FK constraint errors in auto-expand (parallel SQLite writes)
-- [ ] Fix "database is locked" errors (SQLite WAL mode or connection pooling)
+- [x] Fix FK constraint errors in auto-expand (parent_id validation in insert_node + _write_lock)
+- [x] Fix "database is locked" errors (busy_timeout=30000 + asyncio _write_lock)
 
 ### Key Decisions Made
 - **Distillation depth**: L3-L5 (entity/fact/evidence) — working with single-aspect calls
@@ -97,11 +97,3 @@
 - Investigate sea level rise triad anomaly (24.8s pass1, low confidence)
 - Judge triad integration with Pantheon council/court
 - Distill more domains to lift avg confidence across all topics
-
----
-
-## Outstanding (future, lower priority)
-- Cache model load state to avoid cold-starts on repeated calls
-- Parallelize LLM calls in seed pipeline with asyncio.gather
-- Investigate sea level rise triad anomaly (24.8s pass1, low confidence)
-- Judge triad integration with Pantheon council/court
