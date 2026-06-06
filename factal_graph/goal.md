@@ -1,52 +1,76 @@
 # Fractal Graph — Goal
 
-## Main Objective: 2B Speed + 8B Knowledge Quality
+## Main Objective
 
-A 2B model that answers questions with 8B-level knowledge, at 2B speed, using ultra-low VRAM.
+A 2B model that answers questions with ~8B-level knowledge quality, at 2B speed, using ultra-low VRAM.
 
 ### How It Works
-1. **8B seeds once** — Mother model (granite4.1:8b) pre-computes knowledge into a multi-resolution graph (L0-L5 hierarchy with bounding boxes). This is the expensive part — ~30s per topic. Done once.
-2. **2B reasons at runtime** — The tiny 2B model (qwen3.5:2b) never "knows" facts. It receives structured graph context and **reasons over it** — like a lawyer with a fact sheet. No 8B at inference time. ~5-8s per answer.
+1. **Mother seeds once** — Mother model (lfm2.5:latest, ~8B) pre-computes knowledge into a multi-resolution graph (L0-L5 hierarchy with semantic bounding boxes). ~5s per topic, done once.
+2. **2B reasons at runtime** — qwen3.5:2b receives structured graph context and reasons over it. Never "knows" facts — like a lawyer with a fact sheet. ~5-8s per answer.
 
 ### VRAM Profile
 | Phase | Model | VRAM |
 |-------|-------|------|
-| Seeding (one-time) | granite4.1:8b | ~5.3GB |
+| Seeding (one-time) | lfm2.5:latest (~8B) | ~5GB |
 | Runtime (every call) | qwen3.5:2b | ~2.4GB |
 | Embeddings | nomic-embed-text | ~0.3GB |
 
-With `OLLAMA_MAX_LOADED_MODELS=1`, only one model in VRAM at a time. Runtime cost: **2.4GB** (the 2B). The 8B is only loaded during seeding.
+With `OLLAMA_MAX_LOADED_MODELS=1`, only one model in VRAM at a time. Runtime cost: **2.4GB**.
 
-### The Speedup
-| Approach | Model | VRAM | Time/Answer |
-|---------|-------|------|-------------|
-| Direct 8B query | granite4.1:8b | ~5.3GB | ~10-15s |
-| Our pipeline | qwen3.5:2b + graph | ~2.4GB | ~5-8s |
-| 8B standalone (baseline) | granite4.1:8b | ~5.3GB | ~15-30s |
+### Benchmarked Performance
+| Approach | Model | Time/Answer | Confidence |
+|---------|-------|-------------|------------|
+| Direct mother query | lfm2.5 (~8B) | ~15-20s | — (empty JSON ~40%) |
+| 2B + graph (fast) | qwen3.5:2b + graph | ~4.9s | 0.60 |
+| 2B + graph + triad | qwen3.5:2b + graph + judges | ~11.9s | **0.84** |
+| 2B + graph + auto-expand | qwen3.5:2b + mother | ~65.6s | 0.77 |
 
-**~2x faster, ~2x less VRAM**, with the quality of 8B-level structured knowledge.
+**Winner: Triad mode** — 0.84 confidence at 11.9s. Auto-expand is too expensive for default use.
 
 ---
 
-## Current Sprint: Reliability Fixes
+## Current Sprint: Distill Mother Into the Graph
 
 ### Problem
-The pipeline works in theory but crashes in practice due to Ollama model loading races and hallucination.
+The graph is static after seeding. The 2B model can only reason over pre-loaded nodes. If it encounters a gap, it either:
+- Returns low confidence (0.60 without triad)
+- Triggers auto-expand (65.6s — too slow)
+- Returns a weak/empty answer
 
-### Fixes (in progress)
-1. **Model warmup polling** — `_warmup_model()` polls `/api/ps` until model is loaded, no timeout-based killing
-2. **`keep_alive: "0"`** — Free VRAM after every call so models don't block each other
-3. **Web search fallback** — When graph lacks info (mother would hallucinate), fetch real data from the internet via `seed_from_search()`
-4. **Recursion guards** — Background enrich only on round 0, skip recursion on LLM parse failure
+The mother model's parametric knowledge is rich but only sampled at seed time in a top-down hierarchy. Most of what the mother "knows" never makes it into the graph.
 
-### Status
-- [x] All code changes committed (`8ec9e20`)
-- [ ] Run `python -u bench.py` — verify all 4 modes, no crashes
-- [ ] Verify search fallback on non-graph topics, no fallback on graph-native topics
+### Solution: Proactive Distillation
+Instead of waiting for the 2B to hit a gap and reactively calling the mother, **proactively distill the mother's full knowledge into graph nodes**.
+
+### Key Insight
+Current seeding creates a hierarchy (domain -> topic -> concept -> entity -> fact -> evidence). But the mother knows far more than a hierarchy — it knows relationships between concepts, specific facts, contradictions, and nuances. We need extraction prompts that capture this, not just taxonomic structure.
+
+### Success Metrics
+- [ ] Graph coverage: every L0 node has children down to L4 (not just L0-L2)
+- [ ] 2B+Graph confidence averages 0.75+ without triad or auto-expand
+- [ ] Auto-expand trigger rate drops from 87% to <20% of questions
+- [ ] End-to-end answer time stays under 15s for 90% of questions
 
 ---
 
-## Future
-- Cache model load state to skip cold-starts on repeated calls
-- Seed more topics to expand graph coverage
+## Completed Sprints
+
+### Sprint 1: Core Pipeline (DONE)
+2B reasoning pipeline with context gathering, classification, synthesis. Bench: 4.9s/0.60 conf.
+
+### Sprint 2: Mother Seeding + Stability (DONE)
+Structured hierarchy generation, warmup polling, keep_alive:0, web search fallback. No crashes in 846s bench.
+
+### Sprint 3: Judge Triad (DONE)
+Angel/Devil/Neutral two-pass with resolution_conflict edges. Bench: 11.9s/0.84 conf.
+
+### Sprint 4: Code Dedup (DONE)
+Replaced ~150 lines of duplicated search/extract with searchMCP core imports. Clean separation.
+
+---
+
+## Future (after distillation)
+- Cache model load state to skip cold-starts
 - Parallelize LLM calls in seed pipeline
+- Judge triad integration with Pantheon council/court
+- Graph persistence + versioning (snapshot/rollback)
