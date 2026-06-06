@@ -164,6 +164,21 @@ User Question
 Answer + search_fallback flag (was web search needed?)
 ```
 
+## Speed Testing
+
+```bash
+# Compare mother model candidates side-by-side
+python speed_test.py
+
+# Tests: lfm2.5 vs granite4.1:8b on 3 prompt sizes:
+#   1. Short (classify) — JSON entity extraction
+#   2. Medium (seed) — knowledge hierarchy generation
+#   3. Long (extract) — fact extraction from context
+#
+# Reports: load time, generation time, output length per model
+# Saves: data/speed_test_results.json + appends to bench_history.jsonl
+```
+
 ## Benchmarking
 
 ```bash
