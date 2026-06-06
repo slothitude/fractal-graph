@@ -5,6 +5,7 @@ Modes:
   2. 2B standalone (no graph, just the question)
   3. 9B standalone (no graph, just the question)
   4. 2B + graph + auto_expand (full expansion pipeline)
+  5. 2B + graph + judge triad (two-pass Angel/Devil/Neutral)
 
 No LLM-as-judge — the pipeline provides its own metrics:
   confidence, key_facts, gaps, context_tokens, timing, expanded, nodes_added.
@@ -58,7 +59,6 @@ async def _warmup(model: str, url: str) -> float:
     elapsed = round(_time.time() - t0, 1)
     print(f"         warmup {model}: {elapsed}s (timeout)")
     return elapsed
-RESULTS_DIR.mkdir(exist_ok=True)
 
 TEST_QUESTIONS = [
     # Existing graph topics (should score high)
@@ -185,6 +185,37 @@ async def _call_9b_standalone(question: str) -> dict:
     }
 
 
+async def _call_2b_graph_triad(question: str) -> dict:
+    """Mode 5: 2B + graph + judge triad (two-pass)."""
+    from judges import judge_topic, judge_answer
+
+    t0 = time.time()
+
+    # Pass 1: Judge triad verdicts (single 2B call)
+    judge_result = await judge_topic(question)
+    triad_time = round(time.time() - t0, 2)
+
+    # Pass 2: 2B answers with triad verdicts
+    result = await judge_answer(question, judge_result)
+
+    total_time = round(time.time() - t0, 2)
+    return {
+        "answer": result["answer"],
+        "confidence": result["confidence"],
+        "key_facts": result["key_facts"],
+        "gaps": result["gaps"],
+        "context_tokens": 0,
+        "expanded": False,
+        "nodes_added": 0,
+        "search_fallback": False,
+        "time_s": total_time,
+        "triad_time_s": triad_time,
+        "verdicts": judge_result.get("verdicts", {}),
+        "conflicts": judge_result.get("conflicts", []),
+        "edges_created": judge_result.get("edges_created", []),
+    }
+
+
 def _fmt_mode(data: dict) -> str:
     """Format one mode result as a single-line summary."""
     conf = data.get("confidence", 0.0)
@@ -207,6 +238,13 @@ def _fmt_mode(data: dict) -> str:
         parts.append(f"expanded=T +{nodes}nodes")
     else:
         parts.append("expanded=F")
+    # Triad-specific info
+    conflicts = data.get("conflicts", [])
+    if conflicts:
+        parts.append(f"triad_conflicts={len(conflicts)}")
+    triad_time = data.get("triad_time_s")
+    if triad_time:
+        parts.append(f"triad_pass1={triad_time}s")
     return "  ".join(parts)
 
 
@@ -228,7 +266,7 @@ async def run_bench():
         }
 
         # Mode 1: 2B + graph
-        print("  [1/4] 2B + graph...")
+        print("  [1/5] 2B + graph...")
         try:
             entry["graph_2b"] = await _call_2b_graph(q, auto_expand=False)
             print(f"       {_fmt_mode(entry['graph_2b'])}")
@@ -237,7 +275,7 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 2: 2B standalone
-        print("  [2/4] 2B standalone...")
+        print("  [2/5] 2B standalone...")
         try:
             entry["standalone_2b"] = await _call_2b_standalone(q)
             print(f"       {_fmt_mode(entry['standalone_2b'])}")
@@ -246,7 +284,7 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 3: 9B standalone
-        print("  [3/4] 9B standalone...")
+        print("  [3/5] 9B standalone...")
         try:
             entry["standalone_9b"] = await _call_9b_standalone(q)
             print(f"       {_fmt_mode(entry['standalone_9b'])}")
@@ -255,12 +293,21 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 4: 2B + graph + auto_expand
-        print("  [4/4] 2B + graph + auto_expand...")
+        print("  [4/5] 2B + graph + auto_expand...")
         try:
             entry["graph_2b_expand"] = await _call_2b_graph(q, auto_expand=True)
             print(f"       {_fmt_mode(entry['graph_2b_expand'])}")
         except Exception as e:
             entry["graph_2b_expand"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
+            print(f"       ERROR: {e}")
+
+        # Mode 5: 2B + graph + triad
+        print("  [5/5] 2B + graph + triad...")
+        try:
+            entry["graph_2b_triad"] = await _call_2b_graph_triad(q)
+            print(f"       {_fmt_mode(entry['graph_2b_triad'])}")
+        except Exception as e:
+            entry["graph_2b_triad"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
             print(f"       ERROR: {e}")
 
         results.append(entry)
@@ -271,8 +318,8 @@ async def run_bench():
     print(f"\n{'='*70}")
     print("DETAILED RESULTS — PIPELINE METRICS")
     print(f"{'='*70}")
-    print(f"{'Q (L?)':<8} {'Mode':<8} {'Time':>6} {'Conf':>5} {'Facts':>5} {'Gaps':>4} {'Ctx':>6} {'Expanded':>10} {'Search':>6}")
-    print("-" * 78)
+    print(f"{'Q (L?)':<8} {'Mode':<8} {'Time':>6} {'Conf':>5} {'Facts':>5} {'Gaps':>4} {'Ctx':>6} {'Expanded':>10} {'Search':>6} {'Triad':>6}")
+    print("-" * 88)
 
     for r in results:
         q_label = f"{r['question'][:30]}... (L{r['expected_level']})"
@@ -282,6 +329,7 @@ async def run_bench():
             ("standalone_2b", "2B"),
             ("standalone_9b", "9B"),
             ("graph_2b_expand", "2B+Ex"),
+            ("graph_2b_triad", "2B+Tr"),
         ]:
             d = r.get(mode_key, {})
             t = d.get("time_s", 0)
@@ -291,11 +339,13 @@ async def run_bench():
             ctx = d.get("context_tokens", 0)
             exp = "T +" + str(d.get("nodes_added", 0)) if d.get("expanded") else "F"
             sfb = "T" if d.get("search_fallback") else "-"
+            triad_c = len(d.get("conflicts", []))
+            triad_str = f"{triad_c}conf" if triad_c else "-"
             row_label = q_label[:36] if first else ""
             first = False
             c_str = f"{c:.2f}" if c else " -"
             ctx_str = f"{ctx}tok" if ctx else "-"
-            print(f"{row_label:<36} {label:<8} {t:>5.1f}s {c_str:>5} {f:>5} {g:>4} {ctx_str:>6} {exp:>10} {sfb:>6}")
+            print(f"{row_label:<36} {label:<8} {t:>5.1f}s {c_str:>5} {f:>5} {g:>4} {ctx_str:>6} {exp:>10} {sfb:>6} {triad_str:>6}")
 
     # Aggregate averages per mode
     print(f"\n{'='*70}")
@@ -307,6 +357,7 @@ async def run_bench():
         ("standalone_2b", "2B alone"),
         ("standalone_9b", "9B alone"),
         ("graph_2b_expand", "2B+Graph+Expand"),
+        ("graph_2b_triad", "2B+Graph+Triad"),
     ]
 
     for mode_key, label in MODES:
@@ -323,10 +374,16 @@ async def run_bench():
         total_nodes = sum(e.get("nodes_added", 0) for e in entries)
         avg_ctx = sum(e.get("context_tokens", 0) for e in entries) / n
 
+        extra = ""
+        if mode_key == "graph_2b_triad":
+            avg_triad = sum(e.get("triad_time_s", 0) for e in entries) / n
+            total_conflicts = sum(len(e.get("conflicts", [])) for e in entries)
+            extra = f"  avg_triad_pass1={avg_triad:.1f}s  conflicts={total_conflicts}"
+
         print(f"  {label:<22} avg_conf={avg_conf:.2f}  avg_facts={avg_facts:.1f}  "
               f"avg_gaps={avg_gaps:.1f}  avg_ctx={avg_ctx:.0f}tok  "
               f"avg_time={avg_time:.1f}s  expanded={expanded_count}/{n}  "
-              f"nodes={total_nodes}")
+              f"nodes={total_nodes}{extra}")
 
     print(f"\nTotal bench time: {total_time}s")
 

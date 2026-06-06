@@ -1,23 +1,22 @@
 """Judge Triad — Angel / Devil / Neutral resolution-conflict detection.
 
-Three judges operate at different resolution levels:
-  Angel  (L0-L1): optimistic, sees broad consensus
-  Devil  (L4-L5): adversarial, finds contradictions in fine evidence
-  Neutral (L2-L3): balanced, checks cross-resolution coherence
-
-A single batched LLM call produces all three verdicts + conflict edges.
-Disagreements are logged as resolution_conflict edges, not factual contradictions.
+Two-pass approach over graph context:
+  Pass 1: judge_topic() — three judges query different resolution levels,
+          single batched 2B call produces all verdicts + conflict edges
+  Pass 2: judge_answer() — 2B synthesizes final answer from verdicts
 """
 
 import asyncio
 import json
+import logging
 
 import db
 from config import settings
 from embedder import embed
 from chroma_store import query_level
-from seed import _mother_generate, _parse_json_object
+from reasoning import _llm_call, _parse_json
 
+logger = logging.getLogger(__name__)
 
 JUDGES = {
     "angel": {
@@ -42,20 +41,19 @@ JUDGES = {
 
 
 async def judge_topic(topic: str, top_k: int = 5) -> dict:
-    """Run the Angel/Devil/Neutral judge triad on a topic.
+    """Pass 1: Run Angel/Devil/Neutral triad on a topic.
 
-    1. Embed the topic query
-    2. All three judges query their resolution ranges in parallel
-    3. Single batched LLM call produces all verdicts + conflict detection
-    4. Resolution-conflict edges created for disagreements (severity > 0.3)
+    Queries graph at 3 resolution ranges, produces verdicts via single 2B call,
+    creates resolution_conflict edges for disagreements (severity > 0.3).
 
     Returns:
-        {topic, verdicts: {angel, devil, neutral}, conflicts: [...], edges_created: [...]}
+        {topic, verdicts: {angel, devil, neutral}, conflicts: [...],
+         edges_created: [...], nodes_examined: {...}}
     """
     query_emb = await embed(topic)
     conn = db.get_db()
 
-    # Step 2: Query all three resolution ranges in parallel
+    # Query all three resolution ranges in parallel
     async def _query_judge(key: str) -> tuple[str, list[dict]]:
         judge = JUDGES[key]
         lo, hi = judge["resolution_range"]
@@ -82,20 +80,17 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
     )
     judge_contexts = {k: v for k, v in results}
 
-    # Check if we have any nodes at all
     total_nodes = sum(len(v) for v in judge_contexts.values())
     if total_nodes == 0:
         return {
             "topic": topic,
             "verdicts": {},
-            "answer": "No graph data available for this topic.",
             "conflicts": [],
             "edges_created": [],
             "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},
-            "error": "No nodes found in graph for this topic. Seed it first with seed_topic().",
         }
 
-    # Step 3: Build batched prompt for all three judges
+    # Build batched prompt for all three judges
     context_parts = []
     for key in ("angel", "devil", "neutral"):
         judge = JUDGES[key]
@@ -120,8 +115,7 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
         + "\n\n".join(context_parts) + "\n\n"
         "Produce verdicts for all three judges AND identify conflicts between them.\n"
         "A conflict means Angel's optimistic overview disagrees with Devil's adversarial findings — "
-        "this is a RESOLUTION MISMATCH, not necessarily a factual contradiction. "
-        "It means the coarse and fine views of the topic diverge.\n\n"
+        "this is a RESOLUTION MISMATCH, not necessarily a factual contradiction.\n\n"
         "Return JSON:\n"
         "{\n"
         '  "angel": {"assessment": "1-2 sentence verdict", "confidence": 0.0-1.0, '
@@ -135,25 +129,24 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
         '"gap_type": "resolution_mismatch|evidence_gap|perspective_divergence", '
         '"severity": 0.0-1.0, "description": "why they disagree"}]\n'
         "}\n\n"
-        "If Angel and Devil agree, return empty conflicts. Only report real disagreements.\n"
-        "Severity > 0.3 means a meaningful gap worth tracking."
+        "If Angel and Devil agree, return empty conflicts. Severity > 0.3 means a meaningful gap."
     )
 
-    raw = await _mother_generate(triad_prompt, settings.llm_model, num_predict=2048)
-    parsed = _parse_json_object(raw)
+    # Uses _llm_call from reasoning.py — warmup cache + keep_alive:30s
+    raw = await _llm_call(triad_prompt, num_predict=2048)
+    parsed = _parse_json(raw)
 
     if not parsed:
         return {
             "topic": topic,
             "verdicts": {},
-            "answer": "",
             "conflicts": [],
             "edges_created": [],
             "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},
-            "error": f"Failed to parse judge triad response. Raw: {raw[:500]}",
+            "error": f"Failed to parse triad response. Raw: {raw[:500]}",
         }
 
-    # Step 4: Create resolution_conflict edges for conflicts with severity > 0.3
+    # Create resolution_conflict edges for severity > 0.3
     conflicts = parsed.get("conflicts", [])
     edges_created = []
 
@@ -161,16 +154,11 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
         severity = conflict.get("severity", 0)
         if severity <= 0.3:
             continue
-
         angel_node = conflict.get("angel_node")
         devil_node = conflict.get("devil_node")
         if not angel_node or not devil_node:
             continue
-
-        # Verify both nodes exist
-        angel_exists = db.get_node(conn, angel_node)
-        devil_exists = db.get_node(conn, devil_node)
-        if not angel_exists or not devil_exists:
+        if not db.get_node(conn, angel_node) or not db.get_node(conn, devil_node):
             continue
 
         context_text = (
@@ -178,7 +166,6 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
             f"Severity: {severity}\n"
             f"{conflict.get('description', '')}"
         )
-
         try:
             edge_id = db.insert_edge(
                 conn, angel_node, devil_node,
@@ -193,15 +180,36 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
                 "severity": severity,
                 "gap_type": conflict.get("gap_type"),
             })
-        except (ValueError, Exception) as e:
-            pass  # Edge already exists or nodes missing
+        except (ValueError, Exception):
+            pass
 
     verdicts = {}
     for key in ("angel", "devil", "neutral"):
         if key in parsed:
             verdicts[key] = parsed[key]
 
-    # Step 5: Synthesize final answer from triad verdicts
+    return {
+        "topic": topic,
+        "verdicts": verdicts,
+        "conflicts": conflicts,
+        "edges_created": edges_created,
+        "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},
+    }
+
+
+async def judge_answer(topic: str, judge_result: dict) -> dict:
+    """Pass 2: 2B synthesizes final answer from triad verdicts.
+
+    Takes the output of judge_topic() and produces a final answer
+    by weighing Angel's broad view against Devil's critique,
+    using Neutral's bridges to reconcile.
+
+    Returns:
+        {answer, confidence, key_facts, gaps}
+    """
+    verdicts = judge_result.get("verdicts", {})
+    conflicts = judge_result.get("conflicts", [])
+
     verdicts_summary = "\n".join(
         f"{k.upper()}: {v.get('assessment', 'N/A')} "
         f"(confidence={v.get('confidence', 'N/A')}, stance={v.get('stance', 'N/A')})"
@@ -215,43 +223,41 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
     for c in conflicts:
         conflicts_summary += f"  - {c.get('description', 'N/A')[:150]}\n"
 
-    synthesis_prompt = (
+    prompt = (
         "You are the final arbiter of a Judge Triad. Three judges examined "
         "a knowledge graph topic at different resolution levels.\n\n"
         f"Topic: {topic}\n\n"
         f"Judge Verdicts:\n{verdicts_summary}\n\n"
     )
     if bridges_summary:
-        synthesis_prompt += f"Cross-resolution bridges:\n{bridges_summary}\n"
+        prompt += f"Cross-resolution bridges:\n{bridges_summary}\n"
     if conflicts_summary:
-        synthesis_prompt += f"Conflicts found:\n{conflicts_summary}\n"
+        prompt += f"Conflicts found:\n{conflicts_summary}\n"
     if not bridges_summary and not conflicts_summary:
-        synthesis_prompt += "The judges largely agree — no significant conflicts or bridges.\n"
+        prompt += "The judges largely agree — no significant conflicts or bridges.\n"
 
-    synthesis_prompt += (
+    prompt += (
         "\nSynthesize a final answer to the topic question. "
         "Weigh Angel's broad view against Devil's detailed critique, "
         "using Neutral's bridges to reconcile where possible.\n"
-        "Be concise (3-5 sentences). State the overall conclusion clearly.\n\n"
-        "Return JSON: {\"answer\": \"your synthesized answer here\"}"
+        "Be concise (3-5 sentences).\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "answer": "your synthesized answer here",\n'
+        '  "confidence": 0.0-1.0,\n'
+        '  "key_facts": ["fact1", "fact2"],\n'
+        '  "gaps": ["missing info"]\n'
+        "}\n"
     )
 
-    synthesis_raw = await _mother_generate(
-        synthesis_prompt, settings.llm_model, num_predict=512
-    )
-    synthesis_parsed = _parse_json_object(synthesis_raw)
-    final_answer = ""
-    if synthesis_parsed and "answer" in synthesis_parsed:
-        final_answer = synthesis_parsed["answer"]
-    else:
-        # Fallback: use raw text if JSON parse failed
-        final_answer = synthesis_raw.strip()[:500] if synthesis_raw else "Synthesis failed"
+    raw = await _llm_call(prompt, num_predict=512)
+    parsed = _parse_json(raw)
 
-    return {
-        "topic": topic,
-        "verdicts": verdicts,
-        "answer": final_answer,
-        "conflicts": conflicts,
-        "edges_created": edges_created,
-        "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},
-    }
+    if parsed and "answer" in parsed:
+        parsed.setdefault("confidence", 0.5)
+        parsed.setdefault("key_facts", [])
+        parsed.setdefault("gaps", [])
+        return parsed
+
+    answer = raw.strip()[:500] if raw else "Synthesis failed"
+    return {"answer": answer, "confidence": 0.3, "key_facts": [], "gaps": ["JSON parsing failed"]}

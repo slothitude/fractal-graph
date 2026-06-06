@@ -8,7 +8,7 @@ from config import settings
 from ingest import web_ingest as web_ingest_fn, ingest_url as ingest_url_fn
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
-from judges import judge_topic as judge_topic_fn
+from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
 from reasoning import answer as answer_fn
 from growth import curiosity_scan as curiosity_scan_fn
 from mcp.server.fastmcp import FastMCP
@@ -171,7 +171,7 @@ async def seed_expand(node_id: int, mother_model: str = None) -> str:
 
 
 @mcp.tool()
-async def curiosity_scan(max_expansions: int = 3) -> str:
+async def curiosity_scan(max_expansions: int = settings.curiosity_max_expansions) -> str:
     """Scan the graph for sparse areas and expand them automatically.
 
     Finds nodes with no children below L5, nodes with few children,
@@ -195,6 +195,7 @@ async def judge_topic(topic: str, top_k: int = 5) -> str:
 
     All three judges query the graph at their native resolution levels,
     then a single LLM call produces all verdicts + conflict detection.
+    A second 2B call synthesizes a final answer from the verdicts.
     Disagreements are logged as resolution_conflict edges.
 
     Angel sees the forest (L0-L1, optimistic summaries).
@@ -205,8 +206,11 @@ async def judge_topic(topic: str, top_k: int = 5) -> str:
         topic: Topic to judge (e.g. "NATO expansion", "climate policy")
         top_k: Number of nodes to retrieve per resolution level (default 5)
     """
-    result = await judge_topic_fn(topic, top_k)
-    return json.dumps(result, indent=2, default=str)
+    triad = await judge_topic_fn(topic, top_k)
+    answer = await judge_answer_fn(topic, triad)
+    triad["answer"] = answer["answer"]
+    triad["answer_confidence"] = answer["confidence"]
+    return json.dumps(triad, indent=2, default=str)
 
 
 # ============================================================
