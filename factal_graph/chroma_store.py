@@ -15,14 +15,26 @@ def get_client() -> chromadb.PersistentClient:
     return _client
 
 
+def reset_collections():
+    """Clear the collection cache — forces fresh handles on next access."""
+    global _collections
+    _collections = {}
+
+
 def get_collection(level: int) -> chromadb.Collection:
     """Get or create a ChromaDB collection for a resolution level."""
     if level not in _collections:
         client = get_client()
-        _collections[level] = client.get_or_create_collection(
-            name=f"level_{level}",
-            metadata={"resolution_level": level}
-        )
+        try:
+            _collections[level] = client.get_collection(
+                name=f"level_{level}",
+            )
+        except Exception:
+            # Collection corrupt or missing — recreate
+            _collections[level] = client.get_or_create_collection(
+                name=f"level_{level}",
+                metadata={"resolution_level": level}
+            )
     return _collections[level]
 
 
@@ -56,13 +68,32 @@ def delete_node(node_id: int, resolution_level: int):
 
 def query_level(embedding: list[float], level: int, n_results: int = 10) -> list[dict]:
     """Vector search within a single resolution level."""
-    col = get_collection(level)
-    if col.count() == 0:
-        return []
-    results = col.query(
-        query_embeddings=[embedding],
-        n_results=min(n_results, col.count())
-    )
+    try:
+        col = get_collection(level)
+        count = col.count()
+        if count == 0:
+            return []
+        results = col.query(
+            query_embeddings=[embedding],
+            n_results=min(n_results, count)
+        )
+    except Exception:
+        # HNSW corruption — reset and retry with fresh client
+        reset_collections()
+        settings.chroma_path.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(path=str(settings.chroma_path))
+        try:
+            col = client.get_collection(f"level_{level}")
+            count = col.count()
+            if count == 0:
+                return []
+            results = col.query(
+                query_embeddings=[embedding],
+                n_results=min(n_results, count)
+            )
+        except Exception:
+            return []
+
     nodes = []
     for i in range(len(results["ids"][0])):
         nodes.append({
@@ -75,12 +106,33 @@ def query_level(embedding: list[float], level: int, n_results: int = 10) -> list
 
 
 def query_all_levels(embedding: list[float], n_results: int = 5) -> dict[int, list[dict]]:
-    """Vector search across all resolution levels."""
+    """Vector search across all resolution levels.
+
+    Uses a single fresh client connection to avoid HNSW corruption
+    from concurrent access across collections.
+    """
+    settings.chroma_path.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(settings.chroma_path))
     results = {}
     for level in range(6):
-        hits = query_level(embedding, level, n_results)
-        if hits:
+        try:
+            col = client.get_collection(f"level_{level}")
+            count = col.count()
+            if count == 0:
+                continue
+            qr = min(n_results, count)
+            res = col.query(query_embeddings=[embedding], n_results=qr)
+            hits = []
+            for i in range(len(res["ids"][0])):
+                hits.append({
+                    "node_id": res["ids"][0][i],
+                    "content": res["documents"][0][i],
+                    "distance": res["distances"][0][i],
+                    "metadata": res["metadatas"][0][i],
+                })
             results[level] = hits
+        except Exception:
+            continue
     return results
 
 

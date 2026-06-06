@@ -153,7 +153,28 @@ async def synthesize(question: str, context_str: str,
     parsed = _parse_json(raw)
 
     if not parsed or "answer" not in parsed:
-        # Fallback: use raw text
+        # Try extracting answer from raw text — 2B sometimes wraps JSON badly
+        raw = re.sub(r"</?think\s*>", "", raw).strip()
+        if raw.startswith("{") or raw.startswith('"answer"'):
+            # Re-attempt parse on cleaned text
+            parsed = _parse_json(raw)
+        if parsed and "answer" in parsed:
+            parsed.setdefault("confidence", 0.5)
+            parsed.setdefault("key_facts", [])
+            parsed.setdefault("gaps", [])
+            return parsed
+
+        # Last fallback: strip JSON framing if present, use inner text
+        inner = re.sub(r'^\s*\{[^}]*"answer"\s*:\s*"', '', raw)
+        inner = re.sub(r'"\s*\}\s*$', '', inner)
+        if inner and len(inner) > 10:
+            return {
+                "answer": inner.strip(),
+                "confidence": 0.4,
+                "key_facts": [],
+                "gaps": ["JSON parsing failed, extracted raw answer"],
+            }
+
         answer = raw.strip()[:500] if raw else "Failed to generate answer"
         return {
             "answer": answer,

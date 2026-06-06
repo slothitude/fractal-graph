@@ -74,7 +74,7 @@ async def query(prompt: str, resolution_hint: int = None, top_k: int = 5) -> dic
 
     if not coarse_hits:
         # No L0 nodes yet — search all levels
-        all_hits = query_all_levels(vec, top_k=top_k)
+        all_hits = query_all_levels(vec, n_results=top_k)
         return {
             "query": prompt,
             "strategy": "broad_search",

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Token budgets for 2B reasoning pipeline
     max_context_tokens: int = 2048
-    max_answer_tokens: int = 512
+    max_answer_tokens: int = 768
 
     model_config = {"env_prefix": "FRACTAL_"}
 
