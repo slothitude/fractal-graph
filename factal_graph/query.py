@@ -70,11 +70,11 @@ async def query(prompt: str, resolution_hint: int = None, top_k: int = 5) -> dic
     vec = await embed(prompt)
 
     # Coarse search
-    coarse_hits = query_level(vec, 0, top_k=3)
+    coarse_hits = query_level(vec, 0, n_results=3)
 
     if not coarse_hits:
         # No L0 nodes yet — search all levels
-        all_hits = query_all_levels(vec, top_k)
+        all_hits = query_all_levels(vec, top_k=top_k)
         return {
             "query": prompt,
             "strategy": "broad_search",
@@ -109,7 +109,7 @@ async def query(prompt: str, resolution_hint: int = None, top_k: int = 5) -> dic
         levels = [0, 2, 4] if target_resolution == 2 else [0, target_resolution]
         results = {}
         for level in levels:
-            hits = query_level(vec, level, top_k)
+            hits = query_level(vec, level, n_results=top_k)
             if hits:
                 results[level] = hits
         return {
@@ -137,7 +137,7 @@ async def _drill_down(vec: list[float], start_nodes: list[dict],
             node_id = int(hit["node_id"])
 
             # Search the next level by vector similarity
-            level_hits = query_level(vec, next_level, top_k)
+            level_hits = query_level(vec, next_level, n_results=top_k)
             next_hits.extend(level_hits)
 
             # Add children whose bbox contains the query vec
@@ -201,9 +201,9 @@ async def search_nodes(query_text: str, resolution_level: int = None,
     vec = await embed(query_text)
 
     if resolution_level is not None:
-        return query_level(vec, resolution_level, top_k)
+        return query_level(vec, resolution_level, n_results=top_k)
     else:
-        all_results = query_all_levels(vec, top_k)
+        all_results = query_all_levels(vec, n_results=top_k)
         flat = []
         for level, hits in all_results.items():
             for hit in hits:

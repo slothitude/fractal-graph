@@ -412,7 +412,7 @@ async def seed_from_search(query: str, max_urls: int = 5,
     )
 
     scaffold_result = _parse_json_object(
-        await _mother_generate(scaffold_prompt, mother_model)
+        await _mother_generate(scaffold_prompt, mother_model, num_predict=1024)
     )
     if not scaffold_result:
         # Fallback: just return pass 1 nodes, no structure
