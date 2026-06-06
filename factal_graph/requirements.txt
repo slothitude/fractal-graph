@@ -1,0 +1,4 @@
+fastmcp
+chromadb
+httpx
+pydantic-settings
