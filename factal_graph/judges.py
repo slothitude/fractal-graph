@@ -88,8 +88,10 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
         return {
             "topic": topic,
             "verdicts": {},
+            "answer": "No graph data available for this topic.",
             "conflicts": [],
             "edges_created": [],
+            "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},
             "error": "No nodes found in graph for this topic. Seed it first with seed_topic().",
         }
 
@@ -137,15 +139,17 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
         "Severity > 0.3 means a meaningful gap worth tracking."
     )
 
-    raw = await _mother_generate(triad_prompt, settings.llm_model, num_predict=1024)
+    raw = await _mother_generate(triad_prompt, settings.llm_model, num_predict=2048)
     parsed = _parse_json_object(raw)
 
     if not parsed:
         return {
             "topic": topic,
             "verdicts": {},
+            "answer": "",
             "conflicts": [],
             "edges_created": [],
+            "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},
             "error": f"Failed to parse judge triad response. Raw: {raw[:500]}",
         }
 
@@ -197,9 +201,56 @@ async def judge_topic(topic: str, top_k: int = 5) -> dict:
         if key in parsed:
             verdicts[key] = parsed[key]
 
+    # Step 5: Synthesize final answer from triad verdicts
+    verdicts_summary = "\n".join(
+        f"{k.upper()}: {v.get('assessment', 'N/A')} "
+        f"(confidence={v.get('confidence', 'N/A')}, stance={v.get('stance', 'N/A')})"
+        for k, v in verdicts.items()
+    )
+    bridges_summary = ""
+    neutral = verdicts.get("neutral", {})
+    for b in neutral.get("bridges", []):
+        bridges_summary += f"  - {b.get('explanation', 'N/A')}\n"
+    conflicts_summary = ""
+    for c in conflicts:
+        conflicts_summary += f"  - {c.get('description', 'N/A')[:150]}\n"
+
+    synthesis_prompt = (
+        "You are the final arbiter of a Judge Triad. Three judges examined "
+        "a knowledge graph topic at different resolution levels.\n\n"
+        f"Topic: {topic}\n\n"
+        f"Judge Verdicts:\n{verdicts_summary}\n\n"
+    )
+    if bridges_summary:
+        synthesis_prompt += f"Cross-resolution bridges:\n{bridges_summary}\n"
+    if conflicts_summary:
+        synthesis_prompt += f"Conflicts found:\n{conflicts_summary}\n"
+    if not bridges_summary and not conflicts_summary:
+        synthesis_prompt += "The judges largely agree — no significant conflicts or bridges.\n"
+
+    synthesis_prompt += (
+        "\nSynthesize a final answer to the topic question. "
+        "Weigh Angel's broad view against Devil's detailed critique, "
+        "using Neutral's bridges to reconcile where possible.\n"
+        "Be concise (3-5 sentences). State the overall conclusion clearly.\n\n"
+        "Return JSON: {\"answer\": \"your synthesized answer here\"}"
+    )
+
+    synthesis_raw = await _mother_generate(
+        synthesis_prompt, settings.llm_model, num_predict=512
+    )
+    synthesis_parsed = _parse_json_object(synthesis_raw)
+    final_answer = ""
+    if synthesis_parsed and "answer" in synthesis_parsed:
+        final_answer = synthesis_parsed["answer"]
+    else:
+        # Fallback: use raw text if JSON parse failed
+        final_answer = synthesis_raw.strip()[:500] if synthesis_raw else "Synthesis failed"
+
     return {
         "topic": topic,
         "verdicts": verdicts,
+        "answer": final_answer,
         "conflicts": conflicts,
         "edges_created": edges_created,
         "nodes_examined": {k: len(v) for k, v in judge_contexts.items()},

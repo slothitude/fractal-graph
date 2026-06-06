@@ -62,9 +62,10 @@ The 2B model is effectively a **routing layer** over intelligence that was front
 | `chroma_store.py` | ChromaDB — one collection per resolution level, vector search |
 | `query.py` | Query engine — specificity classification, drill-down, multi-level retrieval |
 | `seed.py` | **Mother seeding** — structured hierarchy generation via larger LLM |
+| `judges.py` | Judge triad engine — Angel/Devil/Neutral verdicts with synthesis |
 | `factal_server.py` | MCP server — all tools exposed via stdio |
 
-## MCP Tools (18 total)
+## MCP Tools (19 total)
 
 ### Knowledge Ingest (4 tools)
 - `web_ingest(query, max_urls)` — Search SearXNG → extract → classify → insert nodes
@@ -89,6 +90,10 @@ The 2B model is effectively a **routing layer** over intelligence that was front
 - `propagate_confidence(node_id)` — Bottom-up confidence propagation
 - `graph_stats()` — Nodes/edges per level, ChromaDB coverage
 - `ingest_url(url)` — Fetch and classify URL content
+
+### Judge Triad (2 tools)
+- `judge_topic(topic, top_k)` — Run Angel/Devil/Neutral judge triad on a topic. Angel sees the forest (L0-L1, optimistic), Devil sees the trees (L4-L5, adversarial), Neutral bridges (L2-L3). Disagreements logged as `resolution_conflict` edges.
+- `find_contradictions()` — Lists `resolution_conflict` edges from judge triad disagreements (listed above under Graph Operations)
 
 ### Bounding Boxes
 
@@ -175,6 +180,7 @@ python factal_server.py
 | `challenges` | either | One node challenges the other |
 | `supports` | either | One node supports the other |
 | `derived_from` | child→parent | Child was derived from parent source |
+| `resolution_conflict` | judge→judges | Judges disagree on a topic verdict |
 
 ## Verification
 
@@ -199,4 +205,10 @@ seed_expand(node_id=7)
 
 # 7. Web search + mother structuring
 seed_from_search("quantum computing breakthroughs 2025")
+
+# 8. Judge triad — Angel/Devil/Neutral verdicts on a topic
+judge_topic("NATO expansion")
+
+# 9. Check judge disagreements (resolution_conflict edges)
+find_contradictions()
 ```
