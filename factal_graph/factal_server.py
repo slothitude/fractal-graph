@@ -11,6 +11,10 @@ from distill import distill_domain as distill_domain_fn, distill_all as distill_
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
 from reasoning import answer as answer_fn
 from growth import curiosity_scan as curiosity_scan_fn
+from enrich import (mother_knowledge_probe as enrich_probe_fn,
+                   enrich_node as enrich_node_fn,
+                   cross_link_nodes as cross_link_fn,
+                   auto_crosslink as auto_crosslink_fn)
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("fractal-graph")
@@ -236,6 +240,66 @@ async def distill_coverage() -> str:
     deep resolution coverage, and lists L0 domains with their children.
     """
     result = distill_coverage_fn()
+    return json.dumps(result, indent=2, default=str)
+
+
+# ============================================================
+# Enrichment — Cross-linking + Knowledge Probes
+# ============================================================
+
+@mcp.tool()
+async def enrich_probe(topic: str) -> str:
+    """Probe mother model knowledge vs graph coverage to find gaps.
+
+    Embeds the topic, searches all graph levels, asks mother what it knows,
+    then compares to find uncovered facts.
+
+    Args:
+        topic: Topic to probe (e.g. "quantum computing")
+    """
+    result = await enrich_probe_fn(topic)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def enrich_node(node_id: int) -> str:
+    """Enrich a node by asking mother for related knowledge.
+
+    Given a node, asks the mother model 'what else relates to this?' and
+    inserts new sibling or child nodes with edges to existing siblings.
+
+    Args:
+        node_id: Node ID to enrich
+    """
+    result = await enrich_node_fn(node_id)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def cross_link(node_id_a: int, node_id_b: int) -> str:
+    """Ask mother whether two nodes are related, create edge if confident.
+
+    Args:
+        node_id_a: First node ID
+        node_id_b: Second node ID
+    """
+    result = await cross_link_fn(node_id_a, node_id_b)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def auto_crosslink(domain_node_id: int = None,
+                        max_pairs: int = 20) -> str:
+    """Batch cross-linking: find node pairs that should be related but aren't.
+
+    Focuses on L1 topic nodes under the same L0 domain. Uses keep_alive to
+    batch through domains efficiently.
+
+    Args:
+        domain_node_id: Optional L0 domain node to scope (null = all domains)
+        max_pairs: Maximum node pairs to check (default 20)
+    """
+    result = await auto_crosslink_fn(domain_node_id, max_pairs)
     return json.dumps(result, indent=2, default=str)
 
 

@@ -70,10 +70,11 @@
 ## Next: Enrichment + Quality
 
 ### Phase 8: Incremental Graph Enrichment
-- [ ] `mother_knowledge_probe(topic)` — structured comparison: ask mother "what do you know about X?" vs existing graph nodes
-- [ ] `enrich_node(node_id)` — given a node, ask mother "what else relates to this?" and insert as sibling/child edges
-- [ ] Cross-linking: after distillation, run mother over pairs of nodes to detect missed edges (supports, contradicts, refines)
-- [ ] Edge confidence from mother: "how strongly does A relate to B?" -> edge confidence score
+- [x] `mother_knowledge_probe(topic)` — structured comparison: ask mother "what do you know about X?" vs existing graph nodes
+- [x] `enrich_node(node_id)` — given a node, ask mother "what else relates to this?" and insert as sibling/child edges
+- [x] Cross-linking: after distillation, run mother over pairs of nodes to detect missed edges (supports, contradicts, refines)
+- [x] Edge confidence from mother: "how strongly does A relate to B?" -> edge confidence score
+- [x] MCP tools: `enrich_probe`, `enrich_node`, `cross_link`, `auto_crosslink`
 
 ### Phase 9: Quality Gate
 - [ ] Mother self-consistency check: ask same question 3x, only insert facts that appear in 2/3+ responses
