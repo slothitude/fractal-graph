@@ -50,48 +50,53 @@
 - [x] Remove ~150 lines of SearXNG fan-out + trafilatura from ingest.py
 - [x] `searchmcp/core.py` — public API (search, extract_text, search_and_read)
 
+### Phase 7: Distillation Pipeline (distill.py)
+- [x] `distill_coverage()` — nodes per level, shallow branches, L0 domain list
+- [x] `distill_domain()` — 3-phase: GENERATE (mother hot, keep_alive=15s), EMBED (batches of 5), STORE (dedup+insert)
+- [x] `distill_all()` — enumerate domains from mother, distill each
+- [x] `_mother_generate_keepalive()` — configurable keep_alive, no warmup polling, 300s timeout, num_predict=4096
+- [x] Batch edge embedding (groups of 5) instead of sequential
+- [x] `PROMPT_EXTRACT_FACTS_BATCH` template (ready for larger context windows)
+- [x] Remove ALL `/api/ps` polling loops — bench.py, reasoning.py, seed.py
+- [x] Custom model `lfm2.5:gpu3` (num_gpu=-1, num_ctx=4096)
+- [x] Unicode fix in `_parse_json_array` (cp1252 → ascii replace)
+- [x] FK constraint and database locked error handling
+- [x] Test: quantum computing → 99 collected, 25 created (75% dedup), 6 edges, 713s
+- [x] Bench verified: distillation helps quantum questions but not other topics
+- [x] MCP tools: `distill_topic`, `distill_domains`, `distill_coverage`
+
 ---
 
-## Next: Distill Mother Knowledge Into the Graph
+## Next: Enrichment + Quality
 
-### Problem
-The mother model (lfm2.5, ~8B) is only called during seeding. Once seeded, the graph is static — the 2B model can only reason over what was pre-loaded. If the graph lacks a fact, the 2B can't fill it.
-
-Current workflow for knowledge acquisition:
-1. `seed_topic("X")` — mother generates L0-L5 hierarchy from its parametric memory
-2. `seed_from_search("X")` — SearXNG -> extract -> mother structures extracted text
-3. `seed_expand(node_id)` — mother expands a sparse node
-
-All three go: **mother generates -> parse JSON -> insert nodes**. The mother's knowledge is only captured at seed time. If a user asks about something the mother "knows" but isn't in the graph, the 2B gets low confidence and tries auto-expand (65.6s) or returns a weak answer.
-
-### Goal
-**Distill the mother model's parametric knowledge into the graph structure proactively**, not reactively on low confidence. The graph should be rich enough that the 2B rarely needs to trigger auto-expand.
-
-### Phase 1: Analyze What the Mother Knows vs What the Graph Has
-- [ ] `graph_coverage_report()` — for each L0 domain node, count children per level, identify shallow branches
-- [ ] `mother_knowledge_probe(topic)` — ask mother "what do you know about X?" in structured format, compare against existing nodes
-- [ ] Quantify gap: % of seeded topics that have full L0-L5 coverage vs shallow L0-L2
-
-### Phase 2: Structured Distillation Pipeline
-- [ ] `distill_topic(topic)` — send mother a distillation prompt that extracts ALL knowledge it has about a topic into structured nodes+edges, not just a top-down hierarchy
-- [ ] Prompt engineering: instead of "generate a hierarchy", ask "list every fact, entity, relationship, and source you know about X" — then classify and insert each piece
-- [ ] Batch distillation: `distill_all(depth=5)` — iterate all L0 nodes, distill each to L5
-
-### Phase 3: Incremental Graph Enrichment
+### Phase 8: Incremental Graph Enrichment
+- [ ] `mother_knowledge_probe(topic)` — structured comparison: ask mother "what do you know about X?" vs existing graph nodes
 - [ ] `enrich_node(node_id)` — given a node, ask mother "what else relates to this?" and insert as sibling/child edges
 - [ ] Cross-linking: after distillation, run mother over pairs of nodes to detect missed edges (supports, contradicts, refines)
 - [ ] Edge confidence from mother: "how strongly does A relate to B?" -> edge confidence score
 
-### Phase 4: Quality Gate
+### Phase 9: Quality Gate
 - [ ] Mother self-consistency check: ask same question 3x, only insert facts that appear in 2/3+ responses
 - [ ] Contradiction detection: after distillation, run triad on each L0 to catch mother hallucinations
-- [ ] Source attribution: mother generates "source" hints (wikipedia, general knowledge, etc.) — mark unattributed facts as lower confidence
+- [ ] Source attribution: mother generates "source" hints — mark unattributed facts as lower confidence
+- [ ] Fix FK constraint errors in auto-expand (parallel SQLite writes)
+- [ ] Fix "database is locked" errors (SQLite WAL mode or connection pooling)
 
-### Key Decisions Needed
-- **Distillation depth**: L3 (entity/fact) vs L5 (evidence) — L5 needs real sources, mother will hallucinate them
-- **Batch size**: mother generates ~10-20 nodes per call — how many calls per topic?
-- **Dedup strategy**: cosine sim on embeddings vs text overlap — current L0:0.95/L5:0.80 thresholds
-- **When to distill**: on-demand (user triggers) vs background (curiosity_scan enhanced)
+### Key Decisions Made
+- **Distillation depth**: L3-L5 (entity/fact/evidence) — working with single-aspect calls
+- **Batch size**: 1 aspect per call (4K context limit) — batch template ready for future larger context
+- **keep_alive**: 15s between calls — fast enough for sequential aspect calls
+- **Warmup**: NO polling — just fire the API call, model loads naturally (300s timeout)
+- **num_ctx**: 4096 (default) — 32K caused 5GB VRAM usage, model slower
+
+---
+
+## Outstanding (future, lower priority)
+- Cache model load state to avoid cold-starts on repeated calls
+- Parallelize LLM calls in seed pipeline with asyncio.gather
+- Investigate sea level rise triad anomaly (24.8s pass1, low confidence)
+- Judge triad integration with Pantheon council/court
+- Distill more domains to lift avg confidence across all topics
 
 ---
 
