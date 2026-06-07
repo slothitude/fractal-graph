@@ -741,6 +741,213 @@ async def distill_behavior(
     }
 
 
+async def distill_soul(soul_id: str, situations: list[str] = None,
+                       simulations_per: int = None,
+                       model: str = None) -> dict:
+    """Distill behavior patterns scoped to a soul's subgraph.
+
+    Same as distill_behavior but scoped: MC simulations sample from the
+    soul's tagged nodes only, and patterns are stored with the soul_id tag.
+    Uses the soul's custom probe situations and personality params from
+    the template.
+
+    Args:
+        soul_id: Soul name (e.g. 'coder')
+        situations: Optional probe situations (default from template)
+        simulations_per: MC simulations per probe (default from soul template)
+        model: Model to use for decisions
+
+    Returns:
+        {soul_id, situations_tested, traces_collected, nodes_created, patterns_extracted}
+    """
+    from souls import load_soul_template
+    from reasoning import decide_monte_carlo
+    from seed import _mother_generate_keepalive, _parse_json_array
+    from embedder import embed
+    from growth import _is_duplicate
+
+    import time as _time
+
+    t0 = _time.time()
+    template = load_soul_template(soul_id)
+    personality = template.get("personality", {})
+    m = model or settings.llm_model
+    sims = simulations_per or personality.get("mc_simulations", settings.behavior_simulations_per)
+    probe_situations = situations or template.get("probes", BEHAVIOR_PROBE_SITUATIONS)
+
+    # Override LLM model for this run
+    original_model = settings.llm_model
+    settings.llm_model = m
+    from model_cache import invalidate
+    invalidate()
+
+    conn = db.get_db()
+    traces = []
+
+    # Step 1: Run MC decisions scoped to soul's graph
+    print(f"Running {len(probe_situations)} soul '{soul_id}' probes x {sims} simulations...")
+    for i, situation in enumerate(probe_situations):
+        print(f"  [{i+1}/{len(probe_situations)}] {situation[:60]}...")
+        try:
+            result = await decide_monte_carlo(
+                situation, simulations=sims, model=m,
+                pool_size=personality.get("mc_context_pool", settings.mc_context_pool),
+                sample_k=personality.get("mc_context_subset", settings.mc_context_subset),
+                temperature=personality.get("temperature", 0.3),
+                soul_id=soul_id,
+            )
+            trace = {
+                "situation": situation,
+                "action": result["action"],
+                "confidence": result["confidence"],
+                "consistency": result["consistency"],
+                "risks": result.get("risks", []),
+                "all_simulation_risks": result.get("all_simulation_risks", []),
+                "relevant_patterns": result.get("relevant_patterns", []),
+                "cluster_sizes": result.get("cluster_sizes", []),
+                "model": m,
+            }
+            traces.append(trace)
+            print(f"    action={result['action'][:50]}  "
+                  f"conf={result['confidence']}  "
+                  f"consistency={result['consistency']}")
+        except Exception as e:
+            print(f"    ERROR: {e}")
+            traces.append({
+                "situation": situation,
+                "action": f"ERROR: {e}",
+                "confidence": 0.0,
+                "consistency": 0.0,
+                "risks": [],
+                "all_simulation_risks": [],
+                "relevant_patterns": [],
+                "cluster_sizes": [],
+                "model": m,
+            })
+
+    # Step 2: Extract patterns via mother model
+    print(f"\nExtracting behavior patterns for soul '{soul_id}'...")
+    mother_m = settings.mother_model
+
+    traces_text = ""
+    for t in traces:
+        traces_text += (
+            f"Situation: {t['situation']}\n"
+            f"Action: {t['action']}\n"
+            f"Confidence: {t['confidence']}\n"
+            f"Consistency: {t['consistency']}\n"
+            f"Risks: {', '.join(t.get('all_simulation_risks', [])[:3])}\n"
+            f"Patterns: {', '.join(t.get('relevant_patterns', [])[:2])}\n\n"
+        )
+
+    patterns_raw = await _mother_generate_keepalive(
+        PROMPT_EXTRACT_BEHAVIOR_PATTERNS.format(traces_text=traces_text),
+        keep_alive="15s", model=mother_m,
+    )
+    patterns = _parse_json_array(patterns_raw)
+    print(f"  Extracted {len(patterns)} behavior patterns")
+
+    await _mother_generate_keepalive(".", keep_alive="0", model=mother_m)
+
+    # Step 3: Store patterns tagged with soul_id
+    created_nodes = []
+    behavior_domain_id = None
+
+    # Find or create soul's behavior domain node
+    domain_probe = await embed(
+        f"Soul '{soul_id}' observed decision behavior patterns"
+    )
+    l0_hits = query_level(domain_probe, 0, n_results=5, soul_id=soul_id)
+    for hit in l0_hits:
+        hit_id = int(hit["node_id"])
+        hit_node = db.get_node(conn, hit_id)
+        if hit_node:
+            hit_lower = hit_node["content"].lower()
+            if "behavior" in hit_lower and soul_id in hit_lower:
+                behavior_domain_id = hit_id
+                break
+
+    if not behavior_domain_id:
+        domain_content = f"Soul '{soul_id}' observed decision behavior patterns"
+        domain_emb = domain_probe
+        behavior_domain_id = db.insert_node(
+            conn, domain_content, resolution_level=0, confidence=0.8,
+            soul_id=soul_id,
+            metadata={"soul_name": soul_id, "soul_role": "behavior"},
+        )
+        upsert_node(behavior_domain_id, domain_content, domain_emb, 0, None, 0.8,
+                    soul_id=soul_id)
+        created_nodes.append({"id": behavior_domain_id, "level": 0,
+                              "content": domain_content[:80]})
+
+    # Store L2 patterns and L3 examples with soul_id
+    async with _write_lock:
+        for pattern in patterns:
+            content = pattern.get("category", "")
+            typical_action = pattern.get("typical_action", "")
+            if not content:
+                continue
+            level = int(str(pattern.get("level", 2)).lstrip("Ll"))
+            level = max(2, min(4, level))
+
+            if level <= 2:
+                node_content = (
+                    f"[{soul_id}] When agent encounters situations related to '{content}', "
+                    f"it tends to: {typical_action}. "
+                    f"Avg confidence: {pattern.get('avg_confidence', '?')}. "
+                    f"Common risks: {', '.join(pattern.get('common_risks', []))}"
+                )
+            else:
+                node_content = (
+                    f"[{soul_id}] Agent behavior example in '{content}': {typical_action}. "
+                    f"Confidence: {pattern.get('avg_confidence', '?')}. "
+                    f"Risks: {', '.join(pattern.get('common_risks', []))}"
+                )
+
+            emb = await embed(node_content)
+            if await _is_duplicate(node_content, emb, None, level):
+                continue
+
+            parent_id = behavior_domain_id
+            conf = float(pattern.get("avg_confidence", 0.7))
+            node_id = db.insert_node(
+                conn, node_content, resolution_level=level,
+                parent_id=parent_id, confidence=conf,
+                metadata={"source": "behavior_distillation", "model": m, "soul_id": soul_id},
+                soul_id=soul_id,
+            )
+            upsert_node(node_id, node_content, emb, level, parent_id, conf,
+                        soul_id=soul_id)
+            created_nodes.append({"id": node_id, "level": level,
+                                  "content": node_content[:80]})
+
+        recompute_parent_bbox(conn, behavior_domain_id)
+
+    # Restore original model
+    settings.llm_model = original_model
+    invalidate()
+
+    total_time = round(_time.time() - t0, 1)
+
+    return {
+        "soul_id": soul_id,
+        "situations_tested": len(probe_situations),
+        "simulations_per": sims,
+        "model": m,
+        "traces_collected": len(traces),
+        "patterns_extracted": len(patterns),
+        "nodes_created": len(created_nodes),
+        "behavior_domain_id": behavior_domain_id,
+        "phase_times": {
+            "mc_simulations": round(total_time * 0.7, 1),
+            "pattern_extraction": round(total_time * 0.2, 1),
+            "store": round(total_time * 0.1, 1),
+            "total": total_time,
+        },
+        "created_nodes": created_nodes,
+    }
+
+
 # ============================================================
 # CLI entry point
 # ============================================================

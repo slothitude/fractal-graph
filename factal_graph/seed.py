@@ -664,7 +664,7 @@ async def seed_topic_batch(topic: str, depth: int = 3, mother_model: str = None,
 
 
 async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
-                           confidence: float = 0.8) -> dict:
+                           confidence: float = 0.8, soul_id: str = None) -> dict:
     """Seed an agent procedural knowledge domain.
 
     Uses AGENT_SEED_PROMPT + AGENT_LEVEL_MEANINGS instead of factual ones.
@@ -675,6 +675,7 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
         depth: Maximum resolution depth (default 4)
         mother_model: Override mother model
         confidence: Default confidence (default 0.8)
+        soul_id: Optional soul tag for all created nodes
 
     Returns:
         Summary with node IDs, edges created, levels populated
@@ -699,16 +700,18 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
     domain_text = domain_result["domain"]
     domain_emb = await embed(domain_text)
     domain_id = db.insert_node(
-        conn, domain_text, resolution_level=0, confidence=confidence
+        conn, domain_text, resolution_level=0, confidence=confidence,
+        soul_id=soul_id,
     )
-    upsert_node(domain_id, domain_text, domain_emb, 0, None, confidence)
+    upsert_node(domain_id, domain_text, domain_emb, 0, None, confidence,
+                soul_id=soul_id)
     created_nodes.append({"id": domain_id, "level": 0, "content": domain_text})
 
     # Step 2+: Expand recursively with agent level meanings
     await _expand_level(
         conn, topic, domain_id, domain_text, 0, depth,
         mother_model, confidence, created_nodes, created_edges,
-        level_meanings=AGENT_LEVEL_MEANINGS,
+        level_meanings=AGENT_LEVEL_MEANINGS, soul_id=soul_id,
     )
 
     # Step 3: Compute bounding boxes bottom-up
@@ -722,6 +725,108 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
         "nodes_created": len(created_nodes),
         "edges_created": len(created_edges),
         "nodes": created_nodes,
+        "soul_id": soul_id,
+    }
+
+
+async def seed_soul(name: str, mother_model: str = None) -> dict:
+    """Seed a soul from a YAML template.
+
+    Loads the soul template, seeds each domain with soul_id tagging,
+    and stores the soul's values as high-confidence L2 nodes.
+
+    Args:
+        name: Soul name (e.g. 'coder', 'companion', 'researcher')
+        mother_model: Override mother model
+
+    Returns:
+        Summary with root IDs, nodes created, personality params
+    """
+    from souls import load_soul_template
+    from embedder import embed, embed_batch_parallel
+    from db import _write_lock
+
+    template = load_soul_template(name)
+    conn = db.get_db()
+    mother_m = mother_model or settings.mother_model
+    root_ids = []
+    total_nodes = 0
+    total_edges = 0
+
+    # Step 1: Seed each knowledge domain from the template
+    for domain_cfg in template["domains"]:
+        topic = domain_cfg["topic"]
+        depth = domain_cfg.get("depth", 3)
+        confidence = domain_cfg.get("confidence", 0.8)
+        print(f"  Seeding soul '{name}' domain: {topic} (depth={depth})")
+        try:
+            result = await seed_agent_topic(
+                topic, depth=depth, mother_model=mother_m,
+                confidence=confidence, soul_id=name,
+            )
+            root_ids.append(result.get("root_id"))
+            total_nodes += result.get("nodes_created", 0)
+            total_edges += result.get("edges_created", 0)
+        except Exception as e:
+            print(f"    ERROR seeding domain '{topic}': {e}")
+            logger.warning("Failed to seed soul %s domain %s: %s", name, topic, e)
+
+    # Step 2: Store soul values as high-confidence L2 nodes
+    async with _write_lock:
+        # Find or create a soul identity L0 node
+        identity_text = f"Soul identity: {template['name']} — {template['description']}"
+        identity_emb = await embed(identity_text)
+
+        # Check for existing identity node
+        hits = query_level(identity_emb, 0, n_results=5)
+        identity_id = None
+        for hit in hits:
+            hit_node = db.get_node(conn, int(hit["node_id"]))
+            if hit_node and hit_node.get("soul_id") == name:
+                hit_lower = hit_node["content"].lower()
+                if "soul identity" in hit_lower or f"soul: {name}" in hit_lower:
+                    identity_id = int(hit["node_id"])
+                    break
+
+        if not identity_id:
+            identity_id = db.insert_node(
+                conn, identity_text, resolution_level=0, confidence=0.9,
+                soul_id=name, metadata={"soul_name": name, "soul_role": "identity"},
+            )
+            upsert_node(identity_id, identity_text, identity_emb, 0, None, 0.9,
+                        soul_id=name)
+
+        # Store each value as an L2 node under the identity
+        values = template.get("values", [])
+        if values:
+            value_texts = [f"Soul value ({name}): {v}" for v in values]
+            value_embs = await embed_batch_parallel(value_texts)
+
+            for value_text, value_emb in zip(value_texts, value_embs):
+                # Check for existing value node
+                existing = query_level(value_emb, 2, n_results=1, soul_id=name)
+                if existing and int(existing[0]["node_id"]) != identity_id:
+                    continue
+
+                value_id = db.insert_node(
+                    conn, value_text, resolution_level=2, parent_id=identity_id,
+                    confidence=0.9, soul_id=name,
+                    metadata={"soul_name": name, "soul_role": "value"},
+                )
+                upsert_node(value_id, value_text, value_emb, 2, identity_id, 0.9,
+                            soul_id=name)
+                total_nodes += 1
+
+    return {
+        "soul": name,
+        "description": template["description"],
+        "domains_seeded": len(template["domains"]),
+        "values_stored": len(template.get("values", [])),
+        "root_ids": root_ids,
+        "total_nodes": total_nodes,
+        "total_edges": total_edges,
+        "personality": template.get("personality", {}),
+        "probes_count": len(template.get("probes", [])),
     }
 
 
@@ -729,7 +834,8 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
                        parent_level: int, max_depth: int, mother_model: str,
                        confidence: float, created_nodes: list, created_edges: list,
                        level_meanings: dict = None,
-                       seed_prompt: str = ""):
+                       seed_prompt: str = "",
+                       soul_id: str = None):
     """Expand a node into children at the next resolution level."""
     next_level = parent_level + 1
     if next_level > max_depth:
@@ -781,10 +887,11 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
 
         node_id = db.insert_node(
             conn, content, resolution_level=next_level, parent_id=parent_id,
-            confidence=confidence,
+            confidence=confidence, soul_id=soul_id,
         )
         if emb:
-            upsert_node(node_id, content, emb, next_level, parent_id, confidence)
+            upsert_node(node_id, content, emb, next_level, parent_id, confidence,
+                        soul_id=soul_id)
 
         new_node_ids.append(node_id)
         created_nodes.append({"id": node_id, "level": next_level, "content": content})
@@ -822,6 +929,7 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
                 created_nodes, created_edges,
                 level_meanings=level_meanings,
                 seed_prompt=seed_prompt,
+                soul_id=soul_id,
             )
             for nid, ncontent in batch
         ]
