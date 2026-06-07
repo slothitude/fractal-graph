@@ -119,8 +119,11 @@ async def _mother_generate_zai(prompt: str, model: str) -> str:
                 else:
                     logger.warning("z.ai model returned empty response (attempt %d/3)", attempt + 1)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code in (502, 504) and attempt < 2:
-                wait = 10 * (attempt + 1)
+            if e.response.status_code in (429, 502, 504) and attempt < 2:
+                if e.response.status_code == 429:
+                    wait = 30 * (attempt + 1)  # 30s, 60s for rate limit
+                else:
+                    wait = 10 * (attempt + 1)
                 logger.warning("z.ai %s, retrying in %ds (attempt %d/3)", e, wait, attempt + 1)
                 await asyncio.sleep(wait)
                 continue
@@ -664,11 +667,13 @@ async def seed_topic_batch(topic: str, depth: int = 3, mother_model: str = None,
 
 
 async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
-                           confidence: float = 0.8, soul_id: str = None) -> dict:
+                           confidence: float = 0.8, soul_id: str = None,
+                           _batch: bool = True) -> dict:
     """Seed an agent procedural knowledge domain.
 
     Uses AGENT_SEED_PROMPT + AGENT_LEVEL_MEANINGS instead of factual ones.
     Default depth=4 and confidence=0.8 (higher than factual — agents need reliable rules).
+    Routes to batch mode when a cloud model is available (default).
 
     Args:
         topic: Agent capability domain to seed
@@ -676,10 +681,20 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
         mother_model: Override mother model
         confidence: Default confidence (default 0.8)
         soul_id: Optional soul tag for all created nodes
+        _batch: Use single-call batch mode (default True)
 
     Returns:
         Summary with node IDs, edges created, levels populated
     """
+    model = mother_model or settings.mother_model
+    # Route to batch mode for cloud models
+    if _batch and model:
+        try:
+            return await _seed_agent_topic_batch(topic, depth, model, confidence, soul_id)
+        except Exception as e:
+            logger.warning("Agent batch seed failed for '%s': %s, falling back to recursive", topic, e)
+
+    # Fallback: recursive mode
     conn = db.get_db()
     created_nodes = []
     created_edges = []
@@ -721,6 +736,100 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
         "topic": topic,
         "type": "agent_procedural",
         "root_id": domain_id,
+        "depth_reached": depth,
+        "nodes_created": len(created_nodes),
+        "edges_created": len(created_edges),
+        "nodes": created_nodes,
+        "soul_id": soul_id,
+    }
+
+
+async def _seed_agent_topic_batch(topic: str, depth: int, model: str,
+                                   confidence: float, soul_id: str) -> dict:
+    """Batch seed a procedural agent topic in ONE API call."""
+    from embedder import embed_batch_parallel
+    from db import _write_lock
+
+    depth = min(max(depth, 3), 5)
+    conn = db.get_db()
+    created_nodes = []
+    created_edges = []
+
+    # Build batch prompt using agent level meanings
+    prompt = AGENT_SEED_PROMPT.format(topic=topic) + "\n\n"
+    prompt += _build_batch_prompt(topic, depth, AGENT_LEVEL_MEANINGS)
+
+    # Rate limit: sleep before API call
+    await asyncio.sleep(10)
+
+    logger.info("Agent batch seed: calling cloud model '%s' for topic '%s' depth=%d", model, topic, depth)
+    raw = await _mother_generate_cloud(prompt, model)
+
+    if not raw:
+        raise ValueError("Cloud model returned empty response")
+
+    tree = _parse_json_object(raw)
+    if not tree or "domain" not in tree:
+        raise ValueError(f"Failed to parse tree JSON for topic '{topic}'")
+
+    # Flatten to flat node/edge lists using agent level meanings
+    flat_nodes, flat_edges = _flatten_nested_tree(tree, AGENT_LEVEL_MEANINGS, depth, confidence)
+    if not flat_nodes:
+        return {"error": "Tree had no nodes after flattening", "topic": topic}
+
+    logger.info("Agent batch seed: parsed %d nodes, %d edges from tree", len(flat_nodes), len(flat_edges))
+
+    # Batch embed all node contents
+    all_contents = [n["content"] for n in flat_nodes]
+    all_embeddings = await embed_batch_parallel(all_contents)
+
+    # Insert nodes into DB
+    db_id_map = {}
+    async with _write_lock:
+        for i, node_data in enumerate(flat_nodes):
+            content = node_data["content"]
+            level = node_data["level"]
+            parent_idx = node_data["parent_index"]
+            parent_id = db_id_map.get(parent_idx) if parent_idx is not None else None
+            emb = all_embeddings[i] if i < len(all_embeddings) else None
+
+            node_id = db.insert_node(
+                conn, content, resolution_level=level,
+                parent_id=parent_id, confidence=confidence,
+                soul_id=soul_id,
+            )
+            if emb:
+                upsert_node(node_id, content, emb, level, parent_id, confidence,
+                            soul_id=soul_id)
+
+            db_id_map[i] = node_id
+            created_nodes.append({"id": node_id, "level": level, "content": content[:100]})
+
+        for edge_data in flat_edges:
+            src_idx = edge_data["source_index"]
+            tgt_idx = edge_data["target_index"]
+            src_id = db_id_map.get(src_idx)
+            tgt_id = db_id_map.get(tgt_idx)
+            if src_id and tgt_id and src_id != tgt_id:
+                try:
+                    edge_id = db.insert_edge(
+                        conn, src_id, tgt_id,
+                        edge_type=edge_data.get("type", "related"),
+                        confidence=0.5,
+                        context="Agent batch seed relationship",
+                    )
+                    created_edges.append(edge_id)
+                except (ValueError, Exception):
+                    pass
+
+    # Compute bounding boxes bottom-up
+    if created_nodes:
+        _compute_bboxes_for_subtree(conn, created_nodes[0]["id"])
+
+    return {
+        "topic": topic,
+        "type": "agent_procedural",
+        "root_id": created_nodes[0]["id"] if created_nodes else None,
         "depth_reached": depth,
         "nodes_created": len(created_nodes),
         "edges_created": len(created_edges),
@@ -870,6 +979,8 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
         "Edges are optional — describe relationships between siblings if any.\n"
     )
 
+    # Rate limit: sleep before API call to avoid 429s
+    await asyncio.sleep(5)
     children_data = _parse_json_array(await _mother_generate(expand_prompt, mother_model))
     if not children_data:
         return
