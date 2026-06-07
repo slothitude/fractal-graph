@@ -11,6 +11,7 @@ from distill import distill_domain as distill_domain_fn, distill_all as distill_
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
 from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn, decide as decide_fn, decide_monte_carlo as decide_mc_fn
 import meeseeks
+import code_ingest
 from growth import curiosity_scan as curiosity_scan_fn
 from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
@@ -882,11 +883,81 @@ async def import_graph(data: str, merge: bool = False) -> str:
 
 
 # ============================================================
+# Code Ingestion — Per-Repo Graph Seeding
+# ============================================================
+
+@mcp.tool()
+async def ingest_codebase(repo_path: str, soul_id: str,
+                          max_files: int = None) -> str:
+    """Ingest a codebase into the fractal knowledge graph.
+
+    Walks a repository, extracts modules, files, functions/classes, imports,
+    and code snippets into a resolution hierarchy (L0-L5). All nodes are
+    tagged with soul_id for scoped queries by Meeseeks.
+
+    Args:
+        repo_path: Path to the repository root
+        soul_id: Soul ID to tag all nodes with (e.g. 'repo-django')
+        max_files: Max files to process (default from config: 500)
+    """
+    try:
+        result = await code_ingest.ingest_codebase(
+            repo_path, soul_id, max_files=max_files,
+        )
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def ingest_issue(issue_text: str, repo_soul_id: str) -> str:
+    """Ingest a GitHub issue into a repo's knowledge graph.
+
+    Extracts symptoms (error keywords), code blocks, stack traces,
+    and inline code as nodes. Attaches to the repo graph via soul_id.
+
+    Args:
+        issue_text: Full issue text (title + body)
+        repo_soul_id: Soul ID of the repo graph (e.g. 'repo-django')
+    """
+    try:
+        result = await code_ingest.ingest_issue(issue_text, repo_soul_id)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def ingest_diff(diff_text: str, repo_soul_id: str) -> str:
+    """Ingest a unified diff into a repo's knowledge graph.
+
+    Parses hunks into change nodes, detects new function/class
+    definitions from added lines.
+
+    Args:
+        diff_text: Unified diff text
+        repo_soul_id: Soul ID of the repo graph (e.g. 'repo-django')
+    """
+    try:
+        result = await code_ingest.ingest_diff(diff_text, repo_soul_id)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+# ============================================================
 # Meeseeks — Task-scoped Ephemeral Souls
 # ============================================================
 
 @mcp.tool()
-async def spawn_meeseeks(task: str, parent_soul: str = "coder") -> str:
+async def spawn_meeseeks(task: str, parent_soul: str = "coder",
+                        repo_soul_id: str = None) -> str:
     """Spawn a Meeseeks — a task-scoped ephemeral soul.
 
     Creates a new Meeseeks instance that inherits its parent soul's graph
@@ -896,9 +967,11 @@ async def spawn_meeseeks(task: str, parent_soul: str = "coder") -> str:
     Args:
         task: The task for this Meeseeks to work on
         parent_soul: Parent soul name (e.g. 'coder', 'companion', 'researcher')
+        repo_soul_id: Optional repo soul ID for code-aware graph inheritance
     """
     try:
-        result = await meeseeks.spawn_meeseeks(task, parent_soul)
+        result = await meeseeks.spawn_meeseeks(task, parent_soul,
+                                                repo_soul_id=repo_soul_id)
         return json.dumps(result, indent=2)
     except (FileNotFoundError, ValueError) as e:
         return json.dumps({"error": str(e)})

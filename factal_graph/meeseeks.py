@@ -45,18 +45,25 @@ class MeeseeksInstance:
     sub_meeseeks: list = field(default_factory=list)
     outcome: str = ""
     created_at: float = field(default_factory=time.time)
+    repo_soul_id: str = ""  # optional repo graph to inherit
 
 
 # --- Public API ---
 
 
-async def spawn_meeseeks(task: str, parent_soul: str = "coder") -> dict:
+async def spawn_meeseeks(task: str, parent_soul: str = "coder",
+                         repo_soul_id: str = None) -> dict:
     """Create a new Meeseeks instance for a task.
 
     1. Generate instance_id
     2. Load parent soul template for personality
     3. Create L0 identity node in DB + ChromaDB
     4. Return instance info
+
+    Args:
+        task: The task description
+        parent_soul: Parent soul to inherit personality from
+        repo_soul_id: Optional repo soul ID for code-aware graph inheritance
     """
     from souls import load_soul_template
 
@@ -76,6 +83,7 @@ async def spawn_meeseeks(task: str, parent_soul: str = "coder") -> dict:
         suffering_threshold=settings.meeseeks_suffering_threshold,
         suffering_window=settings.meeseeks_suffering_window,
         personality=personality,
+        repo_soul_id=repo_soul_id or "",
     )
 
     # Create L0 identity node
@@ -108,8 +116,10 @@ async def meeseeks_step(instance_id: str, options: list[str] = None) -> dict:
     """
     instance = _get_active(instance_id)
 
-    # Build soul_ids: own graph + parent soul (read-only inheritance)
+    # Build soul_ids: own graph + parent soul (read-only inheritance) + optional repo graph
     soul_ids = [instance_id, instance.parent_soul]
+    if instance.repo_soul_id:
+        soul_ids.append(instance.repo_soul_id)
 
     # Run MC decision
     decision = await decide_monte_carlo(
@@ -345,6 +355,7 @@ def _instance_summary(instance: MeeseeksInstance, full: bool = False) -> dict:
         "max_steps": instance.max_steps,
         "outcome": instance.outcome,
         "created_at": instance.created_at,
+        "repo_soul_id": instance.repo_soul_id,
     }
     if full:
         summary["consistency_history"] = instance.consistency_history

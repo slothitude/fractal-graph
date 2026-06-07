@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     behavior_probes: int = 10
     behavior_simulations_per: int = 3
 
+    # Code ingestion pipeline
+    code_ingest_max_files: int = 500
+    code_ingest_max_chunk_lines: int = 100
+    code_ingest_skip_dirs: list[str] = [
+        "__pycache__", ".git", "node_modules", "venv", ".venv",
+        "env", ".env", "dist", "build", ".tox",
+    ]
+    code_ingest_skip_exts: list[str] = [
+        ".pyc", ".pyo", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+        ".woff", ".woff2", ".ttf", ".eot", ".map", ".min.js", ".min.css", ".lock",
+    ]
+
     # Meeseeks system — task-scoped ephemeral souls
     meeseeks_max_concurrent: int = 5
     meeseeks_max_steps: int = 20

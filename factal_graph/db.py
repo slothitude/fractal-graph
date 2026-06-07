@@ -220,6 +220,7 @@ EDGE_TYPES = {
     "related", "refines", "contradicts", "exemplifies",
     "generalizes", "challenges", "supports", "derived_from",
     "resolution_conflict",
+    "contains", "imports_from", "mentions",
 }
 
 
