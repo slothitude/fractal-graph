@@ -20,27 +20,29 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 ## Architecture
 
 ```
-                         SEEDING (one-time)
-               +-----------------------------------+
-               |  Mother Model (lfm2.5:gpu3, ~8B)   |
-               |  Generates L0->L{depth} hierarchy    |
-               |  Computes bboxes + cross-res edges   |
-               +-----------------+-----------------+
-                                 |
-                                 v
-              +------------------------------------------+
-              |              Fractal Graph                 |
-              |  SQLite (nodes, edges, bbox) + ChromaDB   |
-              |  Edges: supports, contradicts, refines     |
-              +-----------------+------------------------+
-                                |
-          +----------+----------+----------+
-          |          |          |          |
-          v          v          v          v
+                    SEEDING (one-time)
+          +-----------------------------------+
+          |  Mother Model Ladder               |
+          |  L1: lfm2.5:gpu3 (~8B, local)      |
+          |  L2: nvidia/nemotron-550B (cloud)  |
+          |  Generates L0->L{depth} hierarchy    |
+          |  Computes bboxes + cross-res edges   |
+          +-----------------+-----------------+
+                            |
+                            v
+         +------------------------------------------+
+         |              Fractal Graph                 |
+         |  SQLite (nodes, edges, bbox) + ChromaDB   |
+         |  Edges: supports, contradicts, refines     |
+         +-----------------+------------------------+
+                           |
+         +----------+----------+----------+
+         |          |          |          |
+         v          v          v          v
    +-----------+ +----------+ +---------+ +-----------+
    | 2B Runtime | | Distill  | | Enrich  | | Quality   |
    | classify,  | | mother   | | cross-  | | triad,    |
-   | ask, judge | | extract  | | link    | | consistency|
+   | ask, decide| | extract  | | link    | | consistency|
    +-----------+ +----------+ +---------+ +-----------+
    +-----------+ +-----------+ +-----------+
    | Web UI    | | Export/   | | Search    |
@@ -49,6 +51,7 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 
    RUNTIME — 2B for queries, mother only for seeding/expansion
    SEARCH TRIGGER — fills L4-L5 evidence from web sources at all expansion points
+   AGENT MODE — procedural knowledge (decide()) returns structured actions
 ```
 
 ### The Key Insight
@@ -62,7 +65,7 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 | `config.py`       | Settings -- DB paths, Ollama URLs, model config, token budgets |
 | `db.py`           | SQLite -- nodes, edges, bbox, metadata, export/import |
 | `graph.py`        | Graph ops -- bbox computation, subtree, contradictions, propagation |
-| `seed.py`         | Mother seeding -- hierarchy generation, gap fill, search+seed |
+| `seed.py`         | Mother seeding -- hierarchy generation, agent procedural knowledge, gap fill |
 | `distill.py`      | Distillation -- 3-phase mother knowledge extraction (GENERATE, EMBED, STORE) |
 | `enrich.py`       | Enrichment -- knowledge probes, node enrichment, cross-linking |
 | `quality.py`      | Quality gate -- self-consistency, triad scan, source attribution |
@@ -71,24 +74,26 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 | `chroma_store.py` | ChromaDB -- one collection per level, concurrent-access safe |
 | `model_cache.py`  | Model load state cache -- avoids cold-starts on repeated calls |
 | `context.py`      | Context assembler -- gather, walk graph, format for LLM, bbox level placement |
-| `reasoning.py`    | 2B reasoning -- classify question, synthesize answer, auto-expand |
+| `reasoning.py`    | 2B reasoning -- ask (explain), decide (act), classify, auto-expand |
 | `growth.py`       | Autonomous expansion -- gap fill, enrichment, curiosity scan |
 | `judges.py`       | Judge triad -- Angel/Devil/Neutral two-pass with conflict detection |
 | `query.py`        | Query engine -- specificity classification, drill-down, multi-level search |
 | `gql.py`          | Structured queries -- contradictions, evidence, entity comparison |
-| `bench.py`        | Benchmark -- 5 modes x 8 questions |
+| `bench.py`        | Benchmark -- ask (5 modes), decide (2B vs 0.8b) |
 | `web_ui.py`       | Flask Web UI -- graph visualization, search, export/import endpoints |
 | `templates/index.html` | D3.js force-directed graph, side panel, search, export/import buttons |
-| `factal_server.py`| MCP server -- 31 tools via FastMCP stdio |
+| `factal_server.py`| MCP server -- 35 tools via FastMCP stdio |
 | `search_trigger.py`| Search trigger layer -- rate-limited, deduped web-grounded evidence |
 
 ### External Dependencies
 - **searchMCP** (`C:/Users/aaron/searchmcp/core.py`) -- search + text extraction via SearXNG fan-out and trafilatura/BeautifulSoup.
 
-## MCP Tools (31 total)
+## MCP Tools (35 total)
 
 ### Ask -- 2B Reasoning
 - `ask(question, auto_expand)` -- Primary tool. embed -> classify (2B) -> gather context -> synthesize (2B). Optional auto-expand on low confidence.
+- `ask_with_triad(question)` -- 2B answer + judge triad batched in parallel, faster (~3s savings).
+- `decide(situation, options)` -- Agent decision mode. Returns structured action (not prose). L2-L4 biased context + automatic triad.
 
 ### Knowledge Ingest
 - `add_node(content, resolution_level, parent_id, confidence, source_url, metadata)` -- Manual node
@@ -98,6 +103,7 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 
 ### Mother Model Seeding
 - `seed_topic(topic, depth, mother_model)` -- L0-L{depth} hierarchy from scratch
+- `seed_agent_topic(topic, depth, mother_model)` -- Procedural knowledge domain (decision rules, patterns, failure modes)
 - `seed_from_search(query, max_urls, mother_model)` -- Web search + mother structuring
 - `seed_expand(node_id, mother_model)` -- Expand sparse node, fill missing levels
 
@@ -247,6 +253,8 @@ Answer + confidence + gaps + timing
 
 ## Benchmark Results (2026-06-07)
 
+### Ask Bench
+
 | Mode | Avg Time | Avg Conf | Notes |
 |------|----------|----------|-------|
 | 2B+Graph | 4.9s | 0.60 | Fast, decent |
@@ -254,6 +262,15 @@ Answer + confidence + gaps + timing
 | Mother alone | 19.7s | -- | Empty JSON ~40% |
 | 2B+Graph+Expand | 65.6s | 0.77 | Mother warmup dominates |
 | **2B+Graph+Triad** | **11.9s** | **0.84** | Best quality/speed |
+
+### Decide Bench (Agent Procedural Knowledge)
+
+| Model | Avg Conf | Avg Relevance | Avg Time | Notes |
+|-------|----------|---------------|----------|-------|
+| qwen3.5:2b | 0.76 | 0.30 | 60.8s | Better relevance, slower |
+| qwen3.5:0.8b | 0.84 | 0.22 | 36.6s | Higher confidence, 1.7x faster |
+
+Note: Both models scored low relevance because no procedural knowledge was seeded in the graph. Scores will improve after `seed_agent_topic()`.
 
 ## Configuration
 
@@ -271,6 +288,8 @@ All settings via environment variables with `FRACTAL_` prefix:
 | `FRACTAL_MOTHER_MODEL` | `lfm2.5:gpu3` | Mother model (seeding) |
 | `FRACTAL_SEARCH_TRIGGER_ENABLED` | `true` | Enable search trigger layer |
 | `FRACTAL_SEARCH_MAX_URLS` | `3` | Max URLs per search trigger call |
+| `FRACTAL_NVIDIA_API_KEY` | (none) | NVIDIA Integrate API key for grandmother model |
+| `FRACTAL_NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | NVIDIA API base URL |
 
 ## Edge Types
 
@@ -291,7 +310,8 @@ All settings via environment variables with `FRACTAL_` prefix:
 ```bash
 pip install -r requirements.txt
 
-# Ollama needs: nomic-embed-text, qwen3.5:2b, lfm2.5:gpu3
+# Ollama needs: nomic-embed-text, qwen3.5:2b, lfm2.5:gpu3 (num_ctx 12288)
+# NVIDIA API (optional): nvidia/nemotron-3-ultra-550b-a55b for depth=3+ seeding
 # searchMCP needs: running at C:/Users/aaron/searchmcp/ (for core.py import)
 
 python factal_server.py  # FastMCP stdio (MCP server)
@@ -307,21 +327,28 @@ seed_topic("climate change", depth=3)
 # 2. Ask a question -- 2B reasoning over graph context
 ask("Why does climate change affect biodiversity?")
 
-# 3. Run judge triad for higher confidence
-judge_topic("climate change")
+# 3. Run ask with triad for higher confidence (parallel, ~3s faster)
+ask_with_triad("Is nuclear power a viable climate solution?")
 
-# 4. Web search + mother structuring
+# 4. Agent decision mode -- returns structured action
+decide("A tool call returned an unexpected format")
+decide("Not enough info", options="ask,proceed,abort")
+
+# 5. Seed procedural knowledge (how to act, not what is true)
+seed_agent_topic("task decomposition for AI agents", depth=4)
+
+# 6. Web search + mother structuring
 seed_from_search("quantum computing breakthroughs 2026")
 
-# 5. Expand a sparse node
+# 7. Expand a sparse node
 seed_expand(node_id=7)
 
-# 6. Export/backup the graph
+# 8. Export/backup the graph
 export_graph()
 
-# 7. Import (restores + re-indexes embeddings)
+# 9. Import (restores + re-indexes embeddings)
 import_graph(json_string, merge=True)
 
-# 8. Manual search trigger — ground a topic with real sources
+# 10. Manual search trigger -- ground a topic with real sources
 search_and_ingest("NATO Article 5 invocation history")
 ```
