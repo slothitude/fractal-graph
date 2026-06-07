@@ -7,14 +7,23 @@ from config import settings
 
 
 async def embed(text: str) -> list[float]:
-    """Embed text using Ollama nomic-embed-text. Returns 768-dim vector."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{settings.ollama_url}/api/embeddings",
-            json={"model": settings.embed_model, "prompt": text}
-        )
-        resp.raise_for_status()
-        return resp.json()["embedding"]
+    """Embed text using Ollama nomic-embed-text. Returns 768-dim vector.
+    Retries up to 3 times with 5s backoff for transient network errors."""
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{settings.ollama_url}/api/embeddings",
+                    json={"model": settings.embed_model, "prompt": text}
+                )
+                resp.raise_for_status()
+                return resp.json()["embedding"]
+        except (httpx.ReadTimeout, httpx.ConnectError, httpx.ConnectTimeout) as e:
+            if attempt < 2:
+                import time
+                time.sleep(5)
+            else:
+                raise
 
 
 async def embed_batch(texts: list[str]) -> list[list[float] | None]:
