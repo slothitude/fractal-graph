@@ -70,7 +70,7 @@ async def _mother_generate_zai(prompt: str, model: str) -> str:
 
     GLM5.1 uses reasoning tokens by default — content is empty until reasoning
     finishes and the model starts generating the actual response.
-    Must use max_tokens=8192 to ensure room for both reasoning + content.
+    max_tokens=32768 — full 32k context window for deep seeding at depth=5.
     Falls back to reasoning_content if content is empty.
     """
     url = settings.zai_base_url.rstrip("/")
@@ -90,7 +90,7 @@ async def _mother_generate_zai(prompt: str, model: str) -> str:
                         "messages": [{"role": "user", "content": prompt}],
                         "stream": False,
                         "temperature": 0.3,
-                        "max_tokens": 8192,
+                        "max_tokens": 32768,
                     },
                 )
                 resp.raise_for_status()
@@ -327,13 +327,8 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
     """Seed a single topic end-to-end using the mother model.
 
     Generates a full L0-L{depth} hierarchy:
-    1. Mother creates L0 domain node
-    2. Expands to L1 topics (3-5)
-    3. For each L1, expands to L2 concepts (2-4)
-    4. Continues down to requested depth
-    5. Creates parent-child edges automatically
-    6. Detects cross-resolution edges against existing graph
-    7. Computes bounding boxes bottom-up
+    - Cloud models (z.ai): uses batch mode — single API call for full tree
+    - Local models: uses recursive expansion (one call per node)
 
     Args:
         topic: Topic to seed
@@ -344,10 +339,18 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
     Returns:
         Summary with node IDs, edges created, levels populated
     """
+    model = mother_model or settings.mother_model
+    depth = min(max(depth, 1), 5)  # Clamp 1-5
+
+    # Auto-select batch mode for cloud models at depth >= 3
+    if _is_cloud_model(model) and depth >= 3:
+        logger.info("Using batch seed mode for cloud model '%s' at depth=%d", model, depth)
+        return await seed_topic_batch(topic, depth, mother_model, confidence)
+
+    # Recursive mode for local models or shallow depths
     conn = db.get_db()
     created_nodes = []
     created_edges = []
-    depth = min(max(depth, 1), 5)  # Clamp 1-5
 
     # Step 1: Generate L0 domain node
     domain_prompt = (
@@ -407,6 +410,250 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
     return {
         "topic": topic,
         "root_id": domain_id,
+        "depth_reached": depth,
+        "nodes_created": len(created_nodes) + search_nodes_added,
+        "edges_created": len(created_edges),
+        "search_grounding_nodes": search_nodes_added,
+        "nodes": created_nodes,
+    }
+
+
+def _build_batch_prompt(topic: str, depth: int, level_meanings: dict) -> str:
+    """Build a single-call prompt that asks the model for the FULL tree."""
+    # Child count guidance per level
+    child_guidance = {
+        1: "3-5 children",
+        2: "2-4 children per parent",
+        3: "2-3 children per parent",
+        4: "1-2 children per parent",
+        5: "1-2 children per parent",
+    }
+
+    prompt = (
+        "You are seeding a fractal knowledge graph. "
+        f"Generate the COMPLETE hierarchy from L0 to L{depth} for the topic below "
+        "in a SINGLE nested JSON response.\n\n"
+        f"Topic: {topic}\n\n"
+        "Level meanings:\n"
+    )
+    for lvl, meaning in level_meanings.items():
+        if lvl <= depth:
+            prompt += f"  L{lvl}: {meaning}\n"
+
+    prompt += (
+        f"\nChild count guidance: "
+        + ", ".join(f"L{k}: {v}" for k, v in sorted(child_guidance.items()) if k <= depth)
+        + "\n\n"
+        "Return a SINGLE nested JSON object with this exact structure:\n"
+        "```json\n"
+        "{\n"
+        '  "domain": "broad domain summary for L0",\n'
+        '  "children": [\n'
+        '    {\n'
+        '      "content": "L1 topic text",\n'
+        '      "edges": [{"type": "refines|contradicts|supports", "sibling_index": N}],\n'
+        '      "children": [\n'
+        '        {\n'
+        '          "content": "L2 concept text",\n'
+        '          "edges": [],\n'
+        '          "children": [...]\n'
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "```\n\n"
+        "Rules:\n"
+        "- The root \"domain\" field becomes the L0 node.\n"
+        '- "edges" are OPTIONAL — describe relationships between SIBLINGS (sibling_index is 0-based within the same children array).\n'
+        "- Nest children down to L" + str(depth) + ".\n"
+        "- Be precise and factual. Each node should be 1-2 sentences.\n"
+        "- Return ONLY the JSON, no explanation.\n"
+    )
+    return prompt
+
+
+def _flatten_nested_tree(tree: dict, level_meanings: dict, depth: int,
+                         confidence: float) -> tuple[list[dict], list[dict]]:
+    """Parse nested tree JSON into flat lists of (node_data, edges).
+
+    Returns:
+        (nodes_list, edges_list) where each node has content, level, and
+        edges have source/target indices into nodes_list.
+    """
+    nodes = []
+    edges = []
+
+    if not tree or "domain" not in tree:
+        return nodes, edges
+
+    # L0 root
+    nodes.append({
+        "content": tree["domain"],
+        "level": 0,
+        "parent_index": None,
+    })
+
+    def _walk(children: list, parent_index: int, current_level: int):
+        if current_level > depth or not children:
+            return
+        child_indices = []  # absolute node indices for this sibling group
+        for i, child in enumerate(children):
+            content = child.get("content", "").strip()
+            if not content:
+                continue
+
+            node_index = len(nodes)
+            child_indices.append(node_index)
+            nodes.append({
+                "content": content,
+                "level": current_level,
+                "parent_index": parent_index,
+            })
+
+            # Sibling edges — sibling_index is 0-based within this children array
+            for edge_info in (child.get("edges") or []):
+                sib_idx = edge_info.get("sibling_index")
+                edge_type = edge_info.get("type", "related")
+                if sib_idx is not None and 0 <= sib_idx < len(child_indices):
+                    edges.append({
+                        "source_index": child_indices[sib_idx],
+                        "target_index": node_index,
+                        "type": edge_type,
+                    })
+
+            _walk(child.get("children", []), node_index, current_level + 1)
+
+    _walk(tree.get("children", []), 0, 1)
+    return nodes, edges
+
+
+async def seed_topic_batch(topic: str, depth: int = 3, mother_model: str = None,
+                          confidence: float = 0.7) -> dict:
+    """Seed a topic in ONE API call using a cloud model's large context window.
+
+    Generates the full L0-L{depth} tree as a single nested JSON structure,
+    then flattens it into DB nodes with proper parent-child relationships.
+
+    Args:
+        topic: Topic to seed
+        depth: Maximum resolution depth (default 3)
+        mother_model: Override mother model (should be cloud)
+        confidence: Default confidence for created nodes
+
+    Returns:
+        Summary with node IDs, edges created, levels populated
+    """
+    model = mother_model or settings.mother_model
+    conn = db.get_db()
+    created_nodes = []
+    created_edges = []
+    depth = min(max(depth, 3), 5)  # Batch mode only for depth >= 3
+
+    # Build the single-call prompt
+    prompt = _build_batch_prompt(topic, depth, LEVEL_MEANINGS)
+
+    # Rate limit: sleep before API call to avoid 429s
+    await asyncio.sleep(10)
+
+    # Call cloud model
+    logger.info("Batch seed: calling cloud model '%s' for topic '%s' depth=%d", model, topic, depth)
+    raw = await _mother_generate_cloud(prompt, model)
+
+    if not raw:
+        logger.error("Batch seed: cloud model returned empty for topic '%s'", topic)
+        return {"error": "Cloud model returned empty response", "topic": topic}
+
+    # Parse nested tree
+    tree = _parse_json_object(raw)
+    if not tree or "domain" not in tree:
+        logger.error("Batch seed: failed to parse tree JSON for topic '%s': %s",
+                     topic, raw[:200] if raw else "empty")
+        return {"error": "Failed to parse nested tree JSON", "topic": topic, "raw": raw[:500] if raw else ""}
+
+    # Flatten to flat node/edge lists
+    flat_nodes, flat_edges = _flatten_nested_tree(tree, LEVEL_MEANINGS, depth, confidence)
+    if not flat_nodes:
+        return {"error": "Tree had no nodes after flattening", "topic": topic}
+
+    logger.info("Batch seed: parsed %d nodes, %d edges from tree", len(flat_nodes), len(flat_edges))
+
+    # Batch embed all node contents
+    all_contents = [n["content"] for n in flat_nodes]
+    all_embeddings = await embed_batch_parallel(all_contents)
+
+    # Insert nodes into DB — parents must exist before children
+    # flat_nodes is already in BFS order (parent before children) since _walk2
+    # appends parent before recursing
+    db_id_map = {}  # flat_nodes index → db node_id
+    async with _write_lock:
+        for i, node_data in enumerate(flat_nodes):
+            content = node_data["content"]
+            level = node_data["level"]
+            parent_idx = node_data["parent_index"]
+            parent_id = db_id_map.get(parent_idx) if parent_idx is not None else None
+            emb = all_embeddings[i] if i < len(all_embeddings) else None
+
+            node_id = db.insert_node(
+                conn, content, resolution_level=level,
+                parent_id=parent_id, confidence=confidence,
+            )
+            if emb:
+                upsert_node(node_id, content, emb, level, parent_id, confidence)
+
+            db_id_map[i] = node_id
+            created_nodes.append({"id": node_id, "level": level, "content": content[:100]})
+
+        # Insert edges
+        for edge_data in flat_edges:
+            src_idx = edge_data["source_index"]
+            tgt_idx = edge_data["target_index"]
+            src_id = db_id_map.get(src_idx)
+            tgt_id = db_id_map.get(tgt_idx)
+            if src_id and tgt_id and src_id != tgt_id:
+                try:
+                    edge_id = db.insert_edge(
+                        conn, src_id, tgt_id,
+                        edge_type=edge_data.get("type", "related"),
+                        confidence=0.5,
+                        context="Batch seed sibling relationship",
+                    )
+                    created_edges.append(edge_id)
+                except (ValueError, Exception):
+                    pass
+
+    # Compute bounding boxes bottom-up
+    if created_nodes:
+        root_id = created_nodes[0]["id"]
+        _compute_bboxes_for_subtree(conn, root_id)
+
+    # Post-seed evidence grounding (same as recursive mode)
+    search_nodes_added = 0
+    if settings.search_trigger_enabled and depth >= 3:
+        from search_trigger import search_triggered
+        root_id = created_nodes[0]["id"]
+        children = db.get_children(conn, root_id)
+        l3_nodes = []
+        for c in children:
+            if c["resolution_level"] == 3:
+                l3_nodes.append(c)
+            elif c["resolution_level"] < 3:
+                grandchildren = db.get_children(conn, c["id"])
+                l3_nodes.extend(g for g in grandchildren if g["resolution_level"] == 3)
+
+        for node in l3_nodes[:5]:
+            sr = await search_triggered(
+                "post_seed", node["content"],
+                {"content": node["content"], "resolution_level": node["resolution_level"]},
+                parent_node_id=node["id"],
+            )
+            if sr["triggered"]:
+                search_nodes_added += sr["nodes_created"]
+
+    return {
+        "topic": topic,
+        "mode": "batch",
+        "root_id": created_nodes[0]["id"] if created_nodes else None,
         "depth_reached": depth,
         "nodes_created": len(created_nodes) + search_nodes_added,
         "edges_created": len(created_edges),
