@@ -117,7 +117,7 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
 
     max_attempts = settings.grandmother_max_retries_before_escalate
     for attempt in range(max_attempts):
-        content = await _ollama_call(prompt, model, url, keep_alive="5m", timeout=120.0)
+        content = await _ollama_call(prompt, model, url, keep_alive="5m")
         if content:
             return content
         if attempt < max_attempts - 1:
