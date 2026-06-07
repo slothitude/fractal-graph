@@ -61,12 +61,12 @@ async def _ollama_call(prompt: str, model: str, url: str,
 async def _mother_generate_nvidia(prompt: str, model: str) -> str:
     """Call NVIDIA Integrate API (OpenAI-compatible) for nvidia/ models.
 
-    No token limits — thinking OFF to avoid reasoning_budget eating into
-    the content budget and causing JSON truncation.
+    Thinking OFF to avoid reasoning_budget eating into content budget.
+    max_tokens=4096 — individual expansion calls don't need more.
     """
     url = settings.nvidia_base_url.rstrip("/")
     api_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY", "")
-    timeout = 300.0
+    timeout = 600.0
 
     for attempt in range(2):
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -78,7 +78,7 @@ async def _mother_generate_nvidia(prompt: str, model: str) -> str:
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "temperature": 0.3,
-                    "max_tokens": 32768,
+                    "max_tokens": 4096,
                     "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
