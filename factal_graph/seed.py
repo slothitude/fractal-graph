@@ -35,18 +35,20 @@ def _is_nvidia_model(model: str) -> bool:
 
 
 async def _ollama_call(prompt: str, model: str, url: str,
-                        keep_alive: str = "0", timeout: float = 120.0,
-                        num_predict: int = None) -> str:
-    """Single Ollama /api/chat call. Returns content or empty string."""
+                        keep_alive: str = "0", timeout: float = 300.0,
+                        num_predict: int = 0) -> str:
+    """Single Ollama /api/chat call. Returns content or empty string.
+
+    num_predict=0 means no limit (Ollama generates until EOS).
+    num_ctx=12288 for sufficient context window.
+    """
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "keep_alive": keep_alive,
-        "options": {"temperature": 0.3},
+        "options": {"temperature": 0.3, "num_ctx": 12288, "num_predict": num_predict},
     }
-    if num_predict:
-        body["options"]["num_predict"] = num_predict
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{url}/api/chat", json=body)
         resp.raise_for_status()
@@ -57,10 +59,14 @@ async def _ollama_call(prompt: str, model: str, url: str,
 
 
 async def _mother_generate_nvidia(prompt: str, model: str) -> str:
-    """Call NVIDIA Integrate API (OpenAI-compatible) for nvidia/ models."""
+    """Call NVIDIA Integrate API (OpenAI-compatible) for nvidia/ models.
+
+    No token limits — thinking OFF to avoid reasoning_budget eating into
+    the content budget and causing JSON truncation.
+    """
     url = settings.nvidia_base_url.rstrip("/")
     api_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY", "")
-    timeout = 180.0  # cloud models with thinking can be slow
+    timeout = 300.0
 
     for attempt in range(2):
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -72,9 +78,8 @@ async def _mother_generate_nvidia(prompt: str, model: str) -> str:
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "temperature": 0.3,
-                    "max_tokens": 16384,
-                    "chat_template_kwargs": {"enable_thinking": True},
-                    "reasoning_budget": 16384,
+                    "max_tokens": 32768,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             resp.raise_for_status()
@@ -96,6 +101,8 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
     3. If all attempts return empty AND grandmother_enabled → escalate to NVIDIA grandmother
     4. Escalation trigger: empty response only (not JSON parse failures —
        malformed JSON means the prompt is the bug, not the model size)
+
+    Uses keep_alive=5m to keep model hot during seeding sequences.
     """
     model = model or settings.mother_model
 
@@ -110,7 +117,7 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
 
     max_attempts = settings.grandmother_max_retries_before_escalate
     for attempt in range(max_attempts):
-        content = await _ollama_call(prompt, model, url, keep_alive="0", timeout=120.0)
+        content = await _ollama_call(prompt, model, url, keep_alive="5m", timeout=120.0)
         if content:
             return content
         if attempt < max_attempts - 1:
@@ -235,7 +242,7 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
     """Mother call with configurable keep_alive. For batch generation.
 
     Same ladder logic as _mother_generate but passes through keep_alive,
-    uses longer timeout (300s) and num_predict=4096 for batch work.
+    uses longer timeout (300s) and no prediction limit for batch work.
     No warmup — caller is responsible for keeping model hot.
     """
     model = model or settings.mother_model
@@ -251,7 +258,7 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
     for attempt in range(max_attempts):
         content = await _ollama_call(
             prompt, model, url,
-            keep_alive=keep_alive, timeout=300.0, num_predict=4096,
+            keep_alive=keep_alive, timeout=300.0, num_predict=0,
         )
         if content:
             return content
@@ -408,7 +415,6 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
         conn, topic, domain_id, domain_text, 0, depth,
         mother_model, confidence, created_nodes, created_edges,
         level_meanings=AGENT_LEVEL_MEANINGS,
-        seed_prompt=AGENT_SEED_PROMPT,
     )
 
     # Step 3: Compute bounding boxes bottom-up
@@ -438,12 +444,13 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
     meanings = level_meanings or LEVEL_MEANINGS
 
     # Determine child count based on level
-    child_counts = {1: (3, 5), 2: (2, 4), 3: (2, 4), 4: (1, 3), 5: (1, 2)}
-    min_children, max_children = child_counts.get(next_level, (2, 3))
+    # Keep L3+ lean to avoid exponential blowup at depth=4+
+    child_counts = {1: (3, 5), 2: (2, 4), 3: (2, 3), 4: (1, 2), 5: (1, 2)}
+    min_children, max_children = child_counts.get(next_level, (1, 2))
 
     expand_prompt = ""
-    if seed_prompt:
-        expand_prompt += seed_prompt.format(topic=topic) + "\n\n"
+    # Note: seed_prompt NOT prepended here — only used at L0 domain generation.
+    # Prepending at every level wastes tokens and slows LLM calls significantly.
     expand_prompt += (
         f"Expand this knowledge graph node into {min_children}-{max_children} children "
         f"at resolution level {next_level}.\n\n"
@@ -489,7 +496,7 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
         created_nodes.append({"id": node_id, "level": next_level, "content": content})
 
         # Create edges between siblings if specified
-        sibling_edges = child_data.get("edges", [])
+        sibling_edges = child_data.get("edges") or []
         for edge_info in sibling_edges:
             sib_idx = edge_info.get("sibling_index")
             edge_type = edge_info.get("type", "related")
