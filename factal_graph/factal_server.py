@@ -7,9 +7,9 @@ import graph
 from config import settings
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn, seed_agent_topic as seed_agent_topic_fn
-from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn
+from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn, distill_behavior as distill_behavior_fn
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
-from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn, decide as decide_fn
+from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn, decide as decide_fn, decide_monte_carlo as decide_mc_fn
 from growth import curiosity_scan as curiosity_scan_fn
 from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
@@ -546,7 +546,6 @@ async def decide(situation: str, options: str = "") -> str:
 
     Unlike ask() which returns explanations, decide() returns structured actions
     the agent can execute directly. Biases toward L2-L4 (patterns and rules).
-    Automatically runs judge triad (Angel=planner, Devil=risks, Neutral=evidence).
 
     Args:
         situation: The situation the agent faces
@@ -554,6 +553,44 @@ async def decide(situation: str, options: str = "") -> str:
     """
     opt_list = [o.strip() for o in options.split(",") if o.strip()] if options else []
     result = await decide_fn(situation, options=opt_list if opt_list else None)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def decide_mc(situation: str, options: str = "",
+                    simulations: int = 5) -> str:
+    """Monte Carlo graph search decision — N simulations sampling different graph context subsets.
+    Each simulation picks a random subset of graph nodes and reasons over them.
+    Aggregate by majority vote for robust decisions.
+
+    Args:
+        situation: The situation the agent faces
+        options: Optional comma-separated list of candidate actions
+        simulations: Number of Monte Carlo simulations (default 5)
+    """
+    opt_list = [o.strip() for o in options.split(",") if o.strip()] if options else []
+    result = await decide_mc_fn(
+        situation, options=opt_list if opt_list else None,
+        simulations=simulations,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def distill_behavior(situations: str = "",
+                           simulations: int = 3) -> str:
+    """Distill agent decision behavior into graph procedural knowledge.
+    Runs Monte Carlo decisions on probe situations, extracts patterns
+    from the decision traces, stores as L2-L4 nodes.
+
+    Args:
+        situations: Optional comma-separated probe situations (default: 10 built-in probes)
+        simulations: MC simulations per probe (default 3)
+    """
+    sit_list = [s.strip() for s in situations.split(",") if s.strip()] if situations else None
+    result = await distill_behavior_fn(
+        situations=sit_list, simulations_per=simulations,
+    )
     return json.dumps(result, indent=2, default=str)
 
 

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _cache: dict[tuple[str, str], float] = {}
 _cache_lock = asyncio.Lock()
 
-TTL = 30.0  # seconds — how long we trust a "loaded" check
+TTL = 120.0  # seconds — how long we trust a "loaded" check
 
 
 async def is_model_loaded(model: str, url: str) -> bool:
@@ -71,6 +71,7 @@ async def ensure_model_loaded(model: str, url: str) -> float:
                 json={"model": model,
                       "messages": [{"role": "user", "content": "."}],
                       "stream": False,
+                      "keep_alive": "5m",
                       "options": {"num_predict": 1}},
             )
     except Exception:

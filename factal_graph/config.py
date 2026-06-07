@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     grandmother_enabled: bool = False  # auto-escalation toggle (off by default)
     grandmother_max_retries_before_escalate: int = 2  # retry mother N times first
 
+    # Monte Carlo decision enhancement
+    mc_simulations: int = 5         # simulations per decide_mc call
+    mc_context_pool: int = 10       # candidate nodes per level to draw from
+    mc_context_subset: int = 3       # nodes per simulation (sampled from pool)
+
+    # Behavior distillation
+    behavior_probes: int = 10
+    behavior_simulations_per: int = 3
+
     model_config = {"env_prefix": "FRACTAL_"}
 
 

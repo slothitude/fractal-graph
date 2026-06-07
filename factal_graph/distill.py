@@ -226,7 +226,7 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
     embed_start = time.time()
     texts = [n["content"] for n in collected]
     embeddings = []
-    for i in range(0, len(texts), 20):
+    for i in range(0, len(texts), 5):
         batch = texts[i:i+5]
         print(f"    Embedding batch {i//5+1}/{(len(texts)-1)//5+2} ({len(batch)} nodes)...")
         batch_embs = await embed_batch_parallel(batch)
@@ -491,6 +491,244 @@ def distill_coverage() -> dict:
         "shallow_branches": shallow_branches,
         "shallow_count": len(shallow_branches),
         "domains": domains,
+    }
+
+
+# ============================================================
+# Behavior Distillation — Agent Decision Patterns
+# ============================================================
+
+BEHAVIOR_PROBE_SITUATIONS = [
+    "A tool call returned an unexpected format",
+    "The user request is ambiguous and could mean multiple things",
+    "A file operation failed because the file was not found",
+    "The test suite is failing with assertion errors",
+    "A network request timed out after multiple retries",
+    "A git merge conflict is blocking the current branch",
+    "A database schema mismatch was detected at runtime",
+    "An API rate limit error was returned",
+    "Memory pressure is causing out-of-memory errors",
+    "A required configuration file is missing or corrupted",
+]
+
+
+PROMPT_EXTRACT_BEHAVIOR_PATTERNS = """Analyze these Monte Carlo decision traces from an AI agent.
+Each trace shows a situation, the action the agent chose, its confidence, and identified risks.
+
+Decision traces:
+{traces_text}
+
+Extract behavior patterns from these traces. For each pattern:
+1. What category of situation does it cover? (e.g. "error handling", "ambiguity resolution")
+2. What is the typical action the agent takes?
+3. How confident is the agent typically?
+4. What risks does it usually identify?
+
+Return JSON array:
+[
+  {{"category": "pattern category", "typical_action": "what agent usually does",
+   "avg_confidence": 0.0-1.0, "common_risks": ["risk1", "risk2"],
+   "level": 2}}]
+
+Level meanings:
+  L2: decision pattern (when X, agent tends to Y)
+  L3: concrete example (specific situation->action)
+
+For each pattern, also provide 1-2 concrete L3 examples from the traces.
+Put L3 examples in the same array with level=3.
+
+Be specific — use exact actions and risks from the traces."""
+
+
+async def distill_behavior(
+    situations: list[str] = None,
+    simulations_per: int = None,
+    model: str = None,
+) -> dict:
+    """Distill agent decision behavior into graph procedural knowledge.
+
+    Runs Monte Carlo decisions on probe situations, extracts patterns
+    from the decision traces, stores as L2-L4 nodes under
+    "observed_agent_behavior" domain.
+
+    Args:
+        situations: List of probe situations (default: built-in 10)
+        simulations_per: MC simulations per probe (default from config)
+        model: Model to use for decisions (default from config)
+
+    Returns:
+        {situations_tested, traces_collected, nodes_created, behavior_patterns}
+    """
+    import time as _time
+    from reasoning import decide_monte_carlo
+    from seed import _mother_generate_keepalive, _parse_json_array
+
+    t0 = _time.time()
+    m = model or settings.llm_model
+    sims = simulations_per or settings.behavior_simulations_per
+    probe_situations = situations or BEHAVIOR_PROBE_SITUATIONS
+
+    # Override LLM model for this run
+    original_model = settings.llm_model
+    settings.llm_model = m
+    from model_cache import invalidate
+    invalidate()
+
+    conn = db.get_db()
+    traces = []
+
+    # Step 1: Run MC decisions on each probe situation
+    print(f"Running {len(probe_situations)} probe situations x {sims} simulations...")
+    for i, situation in enumerate(probe_situations):
+        print(f"  [{i+1}/{len(probe_situations)}] {situation[:60]}...")
+        try:
+            result = await decide_monte_carlo(
+                situation, simulations=sims, model=m,
+            )
+            trace = {
+                "situation": situation,
+                "action": result["action"],
+                "confidence": result["confidence"],
+                "consistency": result["consistency"],
+                "risks": result.get("risks", []),
+                "all_simulation_risks": result.get("all_simulation_risks", []),
+                "relevant_patterns": result.get("relevant_patterns", []),
+                "cluster_sizes": result.get("cluster_sizes", []),
+                "model": m,
+            }
+            traces.append(trace)
+            print(f"    action={result['action'][:50]}  "
+                  f"conf={result['confidence']}  "
+                  f"consistency={result['consistency']}")
+        except Exception as e:
+            print(f"    ERROR: {e}")
+            traces.append({
+                "situation": situation,
+                "action": f"ERROR: {e}",
+                "confidence": 0.0,
+                "consistency": 0.0,
+                "risks": [],
+                "all_simulation_risks": [],
+                "relevant_patterns": [],
+                "cluster_sizes": [],
+                "model": m,
+            })
+
+    # Step 2: Feed traces to mother model for pattern extraction
+    print(f"\nExtracting behavior patterns via mother model...")
+    mother_m = settings.mother_model
+
+    # Compress traces for prompt
+    traces_text = ""
+    for t in traces:
+        traces_text += (
+            f"Situation: {t['situation']}\n"
+            f"Action: {t['action']}\n"
+            f"Confidence: {t['confidence']}\n"
+            f"Consistency: {t['consistency']}\n"
+            f"Risks: {', '.join(t.get('all_simulation_risks', [])[:3])}\n"
+            f"Patterns: {', '.join(t.get('relevant_patterns', [])[:2])}\n\n"
+        )
+
+    patterns_raw = await _mother_generate_keepalive(
+        PROMPT_EXTRACT_BEHAVIOR_PATTERNS.format(traces_text=traces_text),
+        keep_alive="15s", model=mother_m,
+    )
+    patterns = _parse_json_array(patterns_raw)
+    print(f"  Extracted {len(patterns)} behavior patterns")
+
+    # Unload mother
+    await _mother_generate_keepalive(".", keep_alive="0", model=mother_m)
+
+    # Step 3: Store patterns as graph nodes
+    created_nodes = []
+    behavior_domain_id = None
+
+    # Find or create "observed_agent_behavior" L0 domain
+    existing = conn.execute(
+        "SELECT id FROM nodes WHERE content LIKE '%observed_agent_behavior%' "
+        "AND resolution_level = 0"
+    ).fetchone()
+    if existing:
+        behavior_domain_id = existing["id"]
+    else:
+        # Create L0 domain node
+        from embedder import embed
+        domain_content = "Observed agent decision behavior patterns distilled from Monte Carlo simulations"
+        domain_emb = await embed(domain_content)
+        behavior_domain_id = db.insert_node(
+            conn, domain_content, resolution_level=0, confidence=0.8,
+        )
+        upsert_node(behavior_domain_id, domain_content, domain_emb, 0, None, 0.8)
+        created_nodes.append({"id": behavior_domain_id, "level": 0,
+                              "content": domain_content[:80]})
+
+    # Store L2 patterns and L3 examples
+    async with _write_lock:
+        for pattern in patterns:
+            content = pattern.get("category", "")
+            typical_action = pattern.get("typical_action", "")
+            if not content:
+                continue
+            level = int(str(pattern.get("level", 2)).lstrip("Ll"))
+            level = max(2, min(4, level))
+
+            if level <= 2:
+                # L2: decision pattern
+                node_content = (
+                    f"When agent encounters situations related to '{content}', "
+                    f"it tends to: {typical_action}. "
+                    f"Avg confidence: {pattern.get('avg_confidence', '?')}. "
+                    f"Common risks: {', '.join(pattern.get('common_risks', []))}"
+                )
+            else:
+                # L3: concrete example
+                node_content = (
+                    f"Agent behavior example in '{content}': {typical_action}. "
+                    f"Confidence: {pattern.get('avg_confidence', '?')}. "
+                    f"Risks: {', '.join(pattern.get('common_risks', []))}"
+                )
+
+            # Dedup check
+            emb = await embed(node_content)
+            if await _is_duplicate(node_content, emb, None, level):
+                continue
+
+            parent_id = behavior_domain_id
+            conf = float(pattern.get("avg_confidence", 0.7))
+            node_id = db.insert_node(
+                conn, node_content, resolution_level=level,
+                parent_id=parent_id, confidence=conf,
+                metadata={"source": "behavior_distillation", "model": m},
+            )
+            upsert_node(node_id, node_content, emb, level, parent_id, conf)
+            created_nodes.append({"id": node_id, "level": level,
+                                  "content": node_content[:80]})
+
+        # Recompute bbox for behavior domain
+        recompute_parent_bbox(conn, behavior_domain_id)
+
+    # Restore original model
+    settings.llm_model = original_model
+    invalidate()
+
+    total_time = round(_time.time() - t0, 1)
+
+    return {
+        "situations_tested": len(probe_situations),
+        "simulations_per": sims,
+        "model": m,
+        "traces_collected": len(traces),
+        "patterns_extracted": len(patterns),
+        "nodes_created": len(created_nodes),
+        "behavior_domain_id": behavior_domain_id,
+        "phase_times": {
+            "mc_simulations": round(total_time * 0.7, 1),
+            "pattern_extraction": round(total_time * 0.2, 1),
+            "store": round(total_time * 0.1, 1),
+            "total": total_time,
+        },
+        "created_nodes": created_nodes,
     }
 
 

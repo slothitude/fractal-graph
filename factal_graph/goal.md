@@ -29,7 +29,34 @@ With `OLLAMA_MAX_LOADED_MODELS=1`, only one model in VRAM at a time. Runtime cos
 
 ---
 
-## Current Sprint: Distill Mother Into the Graph
+## Current Sprint: Phase 16 — Monte Carlo Graph Search + Agent Behavior Distillation
+
+### Problem
+Phase 15's `decide()` had issues:
+- **2B decide()**: avg_conf=0.76, avg_time=60.8s — slow, only 0.30 relevance
+- **0.8b decide()**: avg_conf=0.84, avg_time=36.6s — faster but unreliable JSON
+- **No procedural knowledge seeded** — reasoned over factual context, not decision rules
+- **Single-pass decision** — one call to `decide_synthesize()`, one shot at the right answer
+
+### Solution: Monte Carlo Graph Search
+Run N simulations per model, each sampling a different subset of graph nodes as context.
+The graph IS the search space. Each simulation picks a random walk through the graph,
+gets a different context window, and the 2B/0.8b reasons over it. Aggregate by majority vote.
+
+Plus: **Behavior distillation** — run MC decisions on probe situations, extract patterns
+from the traces, store as L2-L4 procedural knowledge nodes.
+
+### Success Metrics
+- [ ] MC lifts 2B decide confidence from 0.76 to >= 0.85
+- [ ] MC lifts 0.8b decide confidence from 0.84 to >= 0.90
+- [ ] Action consistency >= 80% across simulations (most sims agree)
+- [ ] MC finds 2x more risks than single pass
+- [ ] Behavior distillation creates 20+ L2-L4 procedural nodes per model
+- [ ] MC decide time < 20s for 0.8b, < 30s for 2b
+
+---
+
+## Previous Sprint: Distill Mother Into the Graph
 
 ### Problem
 The graph is static after seeding. The 2B model can only reason over pre-loaded nodes. If it encounters a gap, it either:

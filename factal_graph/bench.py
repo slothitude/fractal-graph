@@ -13,6 +13,7 @@ No LLM-as-judge — the pipeline provides its own metrics:
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import re
@@ -568,12 +569,11 @@ async def run_decide_bench():
                 print(f"  {_fmt_decide(result)}")
 
                 # Score: did the action match expected behavior?
-                action_lower = result.get("action", "").lower()
-                expected_lower = expected.lower()
-                action_words = set(action_lower.split())
-                expected_words = set(expected_lower.split())
-                overlap = action_words & expected_words
-                relevance = len(overlap) / max(len(expected_words), 1)
+                action_text = result.get("action", "")
+                expected_text = expected
+                relevance = round(difflib.SequenceMatcher(
+                    None, action_text.lower(), expected_text.lower()
+                ).ratio(), 2)
 
                 result["relevance"] = round(relevance, 2)
                 model_results[model].append(result)
@@ -649,6 +649,154 @@ async def run_decide_bench():
     print(f"\nResults saved to {RESULTS_DIR / 'bench_decide_results.json'}")
 
 
+async def run_decide_mc_bench():
+    """Bench decide_mc() — test each model separately with Monte Carlo.
+
+    Tests:
+    - decide() single pass (baseline)
+    - decide_mc() N=3 (MC graph search)
+    - decide_mc() N=5 (MC more samples)
+    For both qwen3.5:2b and qwen3.5:0.8b.
+
+    Metrics per model: avg_confidence, action_consistency, risk_coverage, time.
+    """
+    from reasoning import decide, decide_monte_carlo
+
+    original_model = settings.llm_model
+    models = ["qwen3.5:2b", "qwen3.5:0.8b"]
+    modes = [
+        ("decide", 0),
+        ("decide_mc_3", 3),
+        ("decide_mc_5", 5),
+    ]
+
+    # Pre-warmup Ollama connection
+    print("Warming up Ollama connection...")
+    try:
+        await _warmup(settings.llm_url, models[0])
+    except Exception as e:
+        print(f"  Warmup warning: {e}")
+
+    model_results = {}
+    total_t0 = time.time()
+
+    for model in models:
+        print(f"\n{'='*70}")
+        print(f"Model: {model}")
+        print(f"{'='*70}")
+
+        settings.llm_model = model
+        from model_cache import invalidate
+        invalidate()
+
+        model_results[model] = {}
+
+        for mode_name, sims in modes:
+            print(f"\n  Mode: {mode_name} (sims={sims})")
+            print(f"  {'-'*50}")
+
+            mode_entries = []
+
+            for test in DECIDE_QUESTIONS:
+                q = test["q"]
+                expected = test["expected"]
+
+                try:
+                    if sims == 0:
+                        result = await decide(q)
+                        result["time_s"] = result.get("timing", {}).get("total_s", 0)
+                    else:
+                        result = await decide_monte_carlo(
+                            q, simulations=sims, model=model,
+                        )
+                        result["time_s"] = result.get("timing", {}).get("total_s", 0)
+
+                    # Score relevance
+                    action_text = result.get("action", "")
+                    relevance = round(difflib.SequenceMatcher(
+                        None, action_text.lower(), expected.lower()
+                    ).ratio(), 2)
+
+                    result["relevance"] = relevance
+                    mode_entries.append(result)
+
+                    consistency = result.get("consistency", 1.0)
+                    all_risks = result.get("all_simulation_risks", result.get("risks", []))
+                    print(f"    Q: {q[:45]}")
+                    print(f"      conf={result.get('confidence', 0):.2f}  "
+                          f"rel={relevance:.2f}  "
+                          f"consist={consistency:.2f}  "
+                          f"risks={len(all_risks)}  "
+                          f"t={result.get('time_s', 0):.1f}s")
+                except Exception as e:
+                    print(f"    Q: {q[:45]}  ERROR: {e}")
+                    mode_entries.append({
+                        "action": f"ERROR: {e}", "confidence": 0.0,
+                        "time_s": 0, "relevant_patterns": [], "risks": [],
+                        "all_simulation_risks": [], "relevance": 0.0,
+                        "consistency": 0.0,
+                    })
+
+            model_results[model][mode_name] = mode_entries
+
+            # Aggregate for this mode
+            n = len(mode_entries)
+            if n:
+                avg_conf = sum(e.get("confidence", 0) for e in mode_entries) / n
+                avg_rel = sum(e.get("relevance", 0) for e in mode_entries) / n
+                avg_consist = sum(e.get("consistency", 0) for e in mode_entries) / n
+                avg_time = sum(e.get("time_s", 0) for e in mode_entries) / n
+                total_risks = sum(len(e.get("all_simulation_risks", e.get("risks", [])))
+                                  for e in mode_entries)
+                print(f"\n  [{model} {mode_name}] avg_conf={avg_conf:.2f}  "
+                      f"avg_rel={avg_rel:.2f}  avg_consist={avg_consist:.2f}  "
+                      f"total_risks={total_risks}  avg_time={avg_time:.1f}s")
+
+    # Restore
+    settings.llm_model = original_model
+    from model_cache import invalidate
+    invalidate()
+
+    total_time = round(time.time() - total_t0, 1)
+
+    # Comparison table
+    print(f"\n{'='*70}")
+    print("DECIDE MC BENCH — MODEL x MODE COMPARISON")
+    print(f"{'='*70}")
+    print(f"{'Model':<12} {'Mode':<14} {'Avg Conf':>8} {'Avg Rel':>7} "
+          f"{'Avg Consist':>11} {'Total Risks':>12} {'Avg Time':>8}")
+    print("-" * 80)
+
+    for model in models:
+        for mode_name, _ in modes:
+            entries = model_results.get(model, {}).get(mode_name, [])
+            n = len(entries)
+            if not n:
+                continue
+            avg_conf = sum(e.get("confidence", 0) for e in entries) / n
+            avg_rel = sum(e.get("relevance", 0) for e in entries) / n
+            avg_consist = sum(e.get("consistency", 0) for e in entries) / n
+            total_risks = sum(len(e.get("all_simulation_risks", e.get("risks", [])))
+                              for e in entries)
+            avg_time = sum(e.get("time_s", 0) for e in entries) / n
+            print(f"{model:<12} {mode_name:<14} {avg_conf:>8.2f} {avg_rel:>7.2f} "
+                  f"{avg_consist:>11.2f} {total_risks:>12} {avg_time:>7.1f}s")
+
+    print(f"\nTotal bench time: {total_time}s")
+
+    # Persist
+    run_timestamp = datetime.now(timezone.utc).isoformat()
+    run_data = {
+        "timestamp": run_timestamp,
+        "bench_type": "decide_mc",
+        "total_time_s": total_time,
+        "results": model_results,
+    }
+    with open(RESULTS_DIR / "bench_decide_mc_results.json", "w") as f:
+        json.dump(run_data, f, indent=2, default=str)
+    print(f"\nResults saved to {RESULTS_DIR / 'bench_decide_mc_results.json'}")
+
+
 if __name__ == "__main__":
     import sys
     if "--distill" in sys.argv:
@@ -659,5 +807,7 @@ if __name__ == "__main__":
         asyncio.run(run_distill_compare(distill_domain=domain))
     elif "--decide" in sys.argv:
         asyncio.run(run_decide_bench())
+    elif "--decide-mc" in sys.argv:
+        asyncio.run(run_decide_mc_bench())
     else:
         asyncio.run(run_bench())

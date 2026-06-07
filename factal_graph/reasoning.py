@@ -43,7 +43,7 @@ async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "keep_alive": "30s",
+                    "keep_alive": "5m",
                     "options": {
                         "temperature": 0.2,
                         "num_ctx": 8192,
@@ -488,10 +488,12 @@ async def decide_synthesize(situation: str, options: list[str],
 
 async def decide(situation: str, options: list[str] = None) -> dict:
     """Given a situation and optional options, retrieve procedural knowledge
-    and recommend an action via 2B + triad.
+    and recommend an action via 2B.
 
-    Pipeline: embed -> gather_procedural_context (L2-L4 biased) -> decide_synthesize (2B)
-    -> judge_topic (triad) -> judge_answer -> return structured decision.
+    Pipeline: embed -> gather_procedural_context (L2-L4 biased) -> decide_synthesize (2B).
+    Triad is NOT used here — it queries factual levels (L0-L5) which are
+    irrelevant to procedural decisions. Use decide_mc() for Monte Carlo
+    enhanced decisions.
 
     Args:
         situation: Description of the situation the agent faces
@@ -499,10 +501,9 @@ async def decide(situation: str, options: list[str] = None) -> dict:
 
     Returns:
         {situation, action, reasoning, confidence, relevant_patterns, risks,
-         option_scores, timing, triad}
+         option_scores, timing}
     """
     import time
-    from judges import judge_topic, judge_answer
 
     t0 = time.time()
 
@@ -524,23 +525,6 @@ async def decide(situation: str, options: list[str] = None) -> dict:
     decision = await decide_synthesize(situation, options or [], context_str)
     synthesize_time = time.time() - t3
 
-    # Step 4: Run triad automatically (every decide() gets triad judgment)
-    t4 = time.time()
-    triad = await judge_topic(situation)
-    triad_time = time.time() - t4
-
-    # Step 5: Judge answer with triad context
-    t5 = time.time()
-    triad_answer = await judge_answer(situation, triad)
-    judge_time = time.time() - t5
-
-    # Use triad answer confidence if higher
-    triad_conf = triad_answer.get("confidence", 0)
-    if triad_conf > decision.get("confidence", 0):
-        decision["action"] = triad_answer["answer"]
-        decision["reasoning"] = triad_answer.get("reasoning", decision["reasoning"])
-        decision["confidence"] = triad_conf
-
     total_time = time.time() - t0
 
     return {
@@ -556,9 +540,287 @@ async def decide(situation: str, options: list[str] = None) -> dict:
             "embed_s": round(embed_time, 2),
             "context_gather_s": round(context_time, 2),
             "synthesize_s": round(synthesize_time, 2),
-            "triad_s": round(triad_time, 2),
-            "judge_s": round(judge_time, 2),
             "total_s": round(total_time, 2),
         },
-        "triad": triad,
+    }
+
+
+# --- Monte Carlo Graph Search ---
+
+def _gather_procedural_context_sampled(
+    prompt_embedding: list[float],
+    pool_size: int = 10,
+    sample_k: int = 3,
+    max_tokens: int = 3000,
+) -> dict:
+    """Gather a large candidate pool from L2/L3/L4, return a random k-subset.
+
+    Unlike _gather_procedural_context which returns the best-ranked nodes,
+    this gathers a larger pool then randomly samples k nodes for one
+    Monte Carlo simulation. Each simulation sees different context.
+
+    Returns:
+        {nodes: [list of formatted node strings], pool_size: int}
+    """
+    import random
+    from chroma_store import query_level
+    import db as db_mod
+
+    conn = db_mod.get_db()
+    level_weights = {2: 0.5, 3: 0.3, 4: 0.2}
+    pool = []
+    seen_ids = set()
+
+    for level, weight in level_weights.items():
+        hits = query_level(prompt_embedding, level, n_results=pool_size)
+        for hit in hits:
+            node_id = int(hit["node_id"])
+            if node_id in seen_ids:
+                continue
+            node = db_mod.get_node(conn, node_id)
+            if not node:
+                continue
+            seen_ids.add(node_id)
+            edges = db_mod.get_edges(conn, node_id)
+            vector_sim = max(0, 1.0 - hit.get("distance", 1.0))
+            confidence = node.get("confidence", 0.5)
+            score = 0.4 * vector_sim + 0.3 * confidence + 0.3 * weight
+            pool.append({
+                "node": node,
+                "score": score,
+                "level_weight": weight,
+            })
+
+    # Shuffle for randomness, take first k
+    random.shuffle(pool)
+    sampled = pool[:sample_k]
+
+    # Format sampled nodes
+    budget_remaining = max_tokens
+    nodes = []
+    for entry in sampled:
+        node = entry["node"]
+        content = node.get("content", "")
+        text = f"- [ID:{node['id']} L{node['resolution_level']} conf:{node['confidence']:.2f}] {content}"
+        tokens = len(text) // 4
+        if tokens <= budget_remaining:
+            nodes.append(text)
+            budget_remaining -= tokens
+
+    return {"nodes": nodes, "pool_size": len(pool), "sampled_count": len(nodes)}
+
+
+def _word_overlap(s1: str, s2: str) -> float:
+    """Ratio of shared words between two strings."""
+    if not s1 or not s2:
+        return 0.0
+    words1 = set(s1.lower().split())
+    words2 = set(s2.lower().split())
+    if not words1 or not words2:
+        return 0.0
+    return len(words1 & words2) / min(len(words1), len(words2))
+
+
+def _cluster_actions(decisions: list[dict]) -> list[list[dict]]:
+    """Cluster decisions by action word overlap >= 0.5.
+
+    Returns groups of decisions that agree on action.
+    """
+    clusters = []
+    assigned = set()
+
+    for i, d in enumerate(decisions):
+        if i in assigned:
+            continue
+        cluster = [d]
+        assigned.add(i)
+        action_i = d.get("action", "")
+        for j in range(i + 1, len(decisions)):
+            if j in assigned:
+                continue
+            action_j = decisions[j].get("action", "")
+            if _word_overlap(action_i, action_j) >= 0.5:
+                cluster.append(decisions[j])
+                assigned.add(j)
+        clusters.append(cluster)
+
+    return clusters
+
+
+def _aggregate_decisions(clusters: list[list[dict]]) -> dict:
+    """Aggregate clusters: largest cluster wins. Merge risks + patterns."""
+    if not clusters:
+        return {
+            "action": "no decision reached",
+            "reasoning": "all simulations failed",
+            "confidence": 0.0,
+            "relevant_patterns": [],
+            "risks": [],
+        }
+
+    # Largest cluster = winner
+    winner = max(clusters, key=len)
+    winner_action = winner[0].get("action", "unknown")
+
+    # Average confidence across winning cluster
+    confs = [d.get("confidence", 0.5) for d in winner]
+    avg_conf = sum(confs) / len(confs)
+
+    # Union risks (dedup by substring)
+    all_risks = []
+    seen_risk_substr = set()
+    for d in winner:
+        for risk in d.get("risks", []):
+            # Dedup: if any existing risk has >60% word overlap, skip
+            is_dup = any(
+                _word_overlap(risk, existing) > 0.6
+                for existing in all_risks
+            )
+            if not is_dup:
+                all_risks.append(risk)
+
+    # Union relevant_patterns (dedup)
+    all_patterns = []
+    seen_pat_substr = set()
+    for d in winner:
+        for pat in d.get("relevant_patterns", []):
+            is_dup = any(
+                _word_overlap(pat, existing) > 0.6
+                for existing in all_patterns
+            )
+            if not is_dup:
+                all_patterns.append(pat)
+
+    return {
+        "action": winner_action,
+        "reasoning": winner[0].get("reasoning", ""),
+        "confidence": round(avg_conf, 2),
+        "relevant_patterns": all_patterns,
+        "risks": all_risks,
+        "cluster_sizes": [len(c) for c in clusters],
+        "consistency": round(len(winner) / sum(len(c) for c in clusters), 2),
+    }
+
+
+async def decide_monte_carlo(
+    situation: str,
+    options: list[str] = None,
+    simulations: int = None,
+    model: str = None,
+) -> dict:
+    """Monte Carlo graph search decision — N simulations sampling different
+    graph context subsets. Each simulation picks a random subset of graph
+    nodes and reasons over them. Aggregate by majority vote.
+
+    Args:
+        situation: The situation the agent faces
+        options: Optional list of candidate actions
+        simulations: Number of MC simulations (default from config)
+        model: Model to use (default from config)
+
+    Returns:
+        {situation, action, reasoning, confidence, relevant_patterns, risks,
+         consistency, cluster_sizes, simulations_detail, timing}
+    """
+    import time
+    import random
+
+    t0 = time.time()
+    sims = simulations or settings.mc_simulations
+    m = model or settings.llm_model
+    pool_size = settings.mc_context_pool
+    sample_k = settings.mc_context_subset
+
+    # Step 1: Embed once
+    t1 = time.time()
+    embedding = await embed(situation)
+    embed_time = round(time.time() - t1, 2)
+
+    # Step 2: Run N simulations
+    decisions = []
+    sim_details = []
+
+    # Batch into groups of 2 (OLLAMA_NUM_PARALLEL=2)
+    for batch_start in range(0, sims, 2):
+        batch_sims = range(batch_start, min(batch_start + 2, sims))
+
+        async def _run_one_sim(_sim_idx: int) -> dict:
+            """Run one Monte Carlo simulation. Retry once on failure."""
+            for attempt in range(2):
+                sampled = _gather_procedural_context_sampled(
+                    embedding, pool_size=pool_size, sample_k=sample_k,
+                )
+                context_str = format_context_for_llm({
+                    "direct_hits": sampled["nodes"],
+                    "parents": [],
+                    "edges": [],
+                    "total_tokens": sum(len(n) // 4 for n in sampled["nodes"]),
+                })
+                decision = await decide_synthesize(
+                    situation, options or [], context_str,
+                )
+                # If decision has real action (not a fallback), use it
+                if (decision.get("confidence", 0) > 0.3
+                        and decision.get("action", "")
+                        and "Failed" not in decision.get("action", "")):
+                    break
+                # Retry with different random sample
+            return {
+                "decision": decision,
+                "pool_size": sampled["pool_size"],
+                "sampled_count": sampled["sampled_count"],
+            }
+
+        batch_tasks = [_run_one_sim(i) for i in batch_sims]
+        batch_results = await asyncio.gather(*batch_tasks)
+
+        for sim_idx, result in zip(batch_sims, batch_results):
+            d = result["decision"]
+            decisions.append(d)
+            sim_details.append({
+                "sim": sim_idx,
+                "action": d.get("action", ""),
+                "confidence": d.get("confidence", 0),
+                "pool_size": result["pool_size"],
+                "sampled_count": result["sampled_count"],
+            })
+
+    # Step 3: Cluster + aggregate
+    t_cluster = time.time()
+    clusters = _cluster_actions(decisions)
+    aggregated = _aggregate_decisions(clusters)
+    cluster_time = round(time.time() - t_cluster, 2)
+
+    # Step 4: Collect ALL risks across all simulations (not just winner)
+    all_sim_risks = []
+    seen_risks = set()
+    for d in decisions:
+        for risk in d.get("risks", []):
+            is_dup = any(
+                _word_overlap(risk, existing) > 0.6
+                for existing in all_sim_risks
+            )
+            if not is_dup:
+                all_sim_risks.append(risk)
+
+    total_time = round(time.time() - t0, 2)
+
+    return {
+        "situation": situation,
+        "action": aggregated["action"],
+        "reasoning": aggregated["reasoning"],
+        "confidence": aggregated["confidence"],
+        "relevant_patterns": aggregated["relevant_patterns"],
+        "risks": aggregated["risks"],
+        "all_simulation_risks": all_sim_risks,
+        "consistency": aggregated["consistency"],
+        "cluster_sizes": aggregated["cluster_sizes"],
+        "simulations_detail": sim_details,
+        "model": m,
+        "timing": {
+            "embed_s": embed_time,
+            "simulations_s": round(total_time - embed_time - cluster_time, 2),
+            "cluster_s": cluster_time,
+            "total_s": total_time,
+        },
     }
