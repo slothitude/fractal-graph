@@ -102,6 +102,23 @@
 
 ---
 
+### Phase 13: NVIDIA Nemotron 550B Cloud Mother
+- [x] Add NVIDIA Integrate API support (OpenAI-compatible, thinking enabled)
+- [x] `nvidia/` model prefix routing in `_mother_generate` / `_mother_generate_keepalive`
+- [x] 180s timeout, 16384 max_tokens + reasoning_budget
+- [x] Direct model override: `seed_topic("...", mother_model="nvidia/...")`
+
+### Phase 14: Mother Ladder + Timeout Fix
+- [x] Add grandmother config: `grandmother_model`, `grandmother_enabled`, `grandmother_max_retries_before_escalate`
+- [x] Extract `_ollama_call()` helper — DRY up duplicated Ollama httpx boilerplate
+- [x] Ladder in `_mother_generate()`: mother → retry N times → escalate to grandmother
+- [x] Ladder in `_mother_generate_keepalive()`: same pattern, keep_alive + num_predict passed through
+- [x] Anti-cascade guard: grandmother never calls back through ladder
+- [x] Escalation trigger: empty response only (not JSON parse failures)
+- [x] `grandmother_enabled=False` preserves all existing behavior
+
+---
+
 ## Outstanding (future, lower priority)
 - [x] Web UI for graph visualization (Flask + D3.js, port 8018)
 - [x] Export/import graph to JSON format (db.py + MCP tools + Web UI endpoints + download button)

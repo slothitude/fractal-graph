@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     search_trigger_enabled: bool = True
     search_max_urls: int = 3
 
+    # NVIDIA Integrate API (cloud mother model)
+    nvidia_api_key: str = "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"
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+
+    # Grandmother model — cloud escalation when mother fails
+    grandmother_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
+    grandmother_enabled: bool = False  # auto-escalation toggle (off by default)
+    grandmother_max_retries_before_escalate: int = 2  # retry mother N times first
+
     model_config = {"env_prefix": "FRACTAL_"}
 
 

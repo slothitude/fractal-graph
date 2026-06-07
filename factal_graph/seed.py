@@ -5,17 +5,8 @@ node hierarchies with cross-resolution edges and bounding boxes.
 """
 
 import json
+import os
 import re
-
-import httpx
-
-import db
-from db import _write_lock
-from config import settings
-from embedder import embed, embed_batch_parallel
-from chroma_store import upsert_node
-from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
-
 
 import asyncio
 import logging
@@ -25,6 +16,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 import db
+from db import _write_lock
 from config import settings
 from embedder import embed, embed_batch_parallel
 from chroma_store import upsert_node
@@ -33,48 +25,104 @@ from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
 
 # --- Mother model LLM calls ---
 
-async def _mother_generate(prompt: str, model: str = None) -> str:
-    """Call the mother model (larger LLM) for structured generation.
+# ANTI-CASCADE: grandmother never calls _mother_generate.
+# If you need grandmother-first, call _mother_generate_nvidia directly.
+# Do not route grandmother output back through the ladder.
 
-    Retries once on empty response or JSON parse failure.
-    Uses keep_alive=0 to free VRAM immediately for 2B model.
-    """
-    model = model or settings.mother_model
-    url = settings.mother_url
 
-    # Warmup: skip if already loaded (uses shared cache with TTL)
-    from model_cache import ensure_model_loaded
-    await ensure_model_loaded(model, url)
+def _is_nvidia_model(model: str) -> bool:
+    return model and model.startswith("nvidia/")
 
-    # Use /api/chat — lfm2-thinking parser auto-separates thinking into .thinking field
-    # No "format": "json" needed — it causes lfm2.5 to drain tokens on thinking with empty content
-    # No "think": False — it breaks lfm2-thinking parser and leaks raw tags
-    # keep_alive=0 — free VRAM immediately so 2B can load during auto-expand
+
+async def _ollama_call(prompt: str, model: str, url: str,
+                        keep_alive: str = "0", timeout: float = 120.0,
+                        num_predict: int = None) -> str:
+    """Single Ollama /api/chat call. Returns content or empty string."""
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "keep_alive": keep_alive,
+        "options": {"temperature": 0.3},
+    }
+    if num_predict:
+        body["options"]["num_predict"] = num_predict
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{url}/api/chat", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        if "message" in data:
+            return data["message"].get("content", "").strip()
+        return data.get("content", "").strip()
+
+
+async def _mother_generate_nvidia(prompt: str, model: str) -> str:
+    """Call NVIDIA Integrate API (OpenAI-compatible) for nvidia/ models."""
+    url = settings.nvidia_base_url.rstrip("/")
+    api_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY", "")
+    timeout = 180.0  # cloud models with thinking can be slow
+
     for attempt in range(2):
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
-                f"{url}/api/chat",
+                f"{url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "keep_alive": "0",
-                    "options": {"temperature": 0.3},
+                    "temperature": 0.3,
+                    "max_tokens": 16384,
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "reasoning_budget": 16384,
                 },
             )
             resp.raise_for_status()
             data = resp.json()
-            content = ""
-            if "message" in data:
-                content = data["message"].get("content", "").strip()
-            else:
-                content = data.get("content", "").strip()
-
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             if content:
                 return content
-
             if attempt == 0:
-                logger.warning("Mother model returned empty response, retrying...")
+                logger.warning("NVIDIA model returned empty response, retrying...")
+
+    return ""
+
+
+async def _mother_generate(prompt: str, model: str = None) -> str:
+    """Call the mother model with ladder escalation to grandmother on failure.
+
+    1. If model is nvidia/ → go directly to NVIDIA API (no ladder)
+    2. Try local mother up to N times (configurable via grandmother_max_retries_before_escalate)
+    3. If all attempts return empty AND grandmother_enabled → escalate to NVIDIA grandmother
+    4. Escalation trigger: empty response only (not JSON parse failures —
+       malformed JSON means the prompt is the bug, not the model size)
+    """
+    model = model or settings.mother_model
+
+    # Explicit nvidia/ request → go directly (no ladder)
+    if _is_nvidia_model(model):
+        return await _mother_generate_nvidia(prompt, model)
+
+    # Step 1: Try local mother up to N times
+    url = settings.mother_url
+    from model_cache import ensure_model_loaded
+    await ensure_model_loaded(model, url)
+
+    max_attempts = settings.grandmother_max_retries_before_escalate
+    for attempt in range(max_attempts):
+        content = await _ollama_call(prompt, model, url, keep_alive="0", timeout=120.0)
+        if content:
+            return content
+        if attempt < max_attempts - 1:
+            logger.warning("Mother attempt %d/%d returned empty", attempt + 1, max_attempts)
+
+    # Step 2: Escalate to grandmother
+    if settings.grandmother_enabled:
+        logger.info("Mother failed after %d attempts, escalating to grandmother", max_attempts)
+        content = await _mother_generate_nvidia(prompt, settings.grandmother_model)
+        if content:
+            return content
+        logger.warning("Grandmother also failed")
 
     return ""
 
@@ -165,42 +213,37 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
                                      model: str = None) -> str:
     """Mother call with configurable keep_alive. For batch generation.
 
-    Same warmup + retry logic as _mother_generate but passes through
-    the keep_alive parameter so the mother stays hot between calls.
-    Use keep_alive="0" after the last call in a batch to unload.
+    Same ladder logic as _mother_generate but passes through keep_alive,
+    uses longer timeout (300s) and num_predict=4096 for batch work.
+    No warmup — caller is responsible for keeping model hot.
     """
     model = model or settings.mother_model
+
+    # Explicit nvidia/ request → go directly (no ladder)
+    if _is_nvidia_model(model):
+        return await _mother_generate_nvidia(prompt, model)
+
+    # Step 1: Try local mother up to N times
     url = settings.mother_url
 
-    # No warmup polling — caller is responsible for keeping model hot
-    # (warmup only in _mother_generate for single fire-and-forget calls)
+    max_attempts = settings.grandmother_max_retries_before_escalate
+    for attempt in range(max_attempts):
+        content = await _ollama_call(
+            prompt, model, url,
+            keep_alive=keep_alive, timeout=300.0, num_predict=4096,
+        )
+        if content:
+            return content
+        if attempt < max_attempts - 1:
+            logger.warning("Mother keepalive attempt %d/%d returned empty", attempt + 1, max_attempts)
 
-    # Use /api/chat with configurable keep_alive
-    for attempt in range(2):
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{url}/api/chat",
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "keep_alive": keep_alive,
-                    "options": {"temperature": 0.3, "num_predict": 4096},
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = ""
-            if "message" in data:
-                content = data["message"].get("content", "").strip()
-            else:
-                content = data.get("content", "").strip()
-
-            if content:
-                return content
-
-            if attempt == 0:
-                logger.warning("Mother model returned empty response, retrying...")
+    # Step 2: Escalate to grandmother
+    if settings.grandmother_enabled:
+        logger.info("Mother keepalive failed after %d attempts, escalating to grandmother", max_attempts)
+        content = await _mother_generate_nvidia(prompt, settings.grandmother_model)
+        if content:
+            return content
+        logger.warning("Grandmother also failed")
 
     return ""
 
