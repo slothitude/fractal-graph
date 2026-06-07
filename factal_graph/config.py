@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     curiosity_max_expansions: int = 3     # max expansions per curiosity scan
     max_expansion_rounds: int = 2         # max re-answer rounds (prevents infinite loop)
 
+    # Search trigger layer
+    search_trigger_enabled: bool = True
+    search_max_urls: int = 3
+
     model_config = {"env_prefix": "FRACTAL_"}
 
 

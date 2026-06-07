@@ -331,12 +331,31 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
                 recompute_parent_bbox(conn, cn["id"])
 
     store_time = round(time.time() - store_start, 1)
+
+    # === POST-DISTILL: Ground low-confidence L4 nodes via search ===
+    search_grounding = 0
+    if settings.search_trigger_enabled:
+        from search_trigger import search_triggered
+        low_conf_nodes = [
+            cn for cn in created_nodes
+            if cn["level"] == 4
+        ][:5]  # Cap at 5 per domain
+        for cn in low_conf_nodes:
+            sr = await search_triggered(
+                "post_distill", cn["content"],
+                {"content": cn["content"], "resolution_level": cn["level"]},
+                parent_node_id=cn["id"],
+            )
+            if sr["triggered"]:
+                search_grounding += sr["nodes_created"]
+
     total_time = round(time.time() - t0, 1)
 
     return {
         "domain": domain,
-        "nodes_created": len(created_nodes),
+        "nodes_created": len(created_nodes) + search_grounding,
         "edges_created": len(created_edges),
+        "search_grounding_nodes": search_grounding,
         "phase_times": {
             "generate": gen_time,
             "embed": embed_time,

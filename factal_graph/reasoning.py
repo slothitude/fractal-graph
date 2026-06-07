@@ -212,14 +212,31 @@ async def answer(question: str, auto_expand: bool = True,
             and (conf < settings.auto_expand_threshold or len(gaps) > 0)
             and _round < settings.max_expansion_rounds):
 
-        # Synchronous gap fill (this IS the enrichment — no background task
-        # because with keep_alive=0 only one model fits in VRAM at a time)
-        from growth import fill_gaps
-        fill_result = await fill_gaps(
-            gaps, question, max_nodes=settings.max_gap_fill_nodes,
-        )
+        # Try search-triggered gap fill first (faster, grounded in real sources)
+        from search_trigger import search_triggered
+        search_nodes_added = 0
+        if settings.search_trigger_enabled and gaps:
+            for gap_str in gaps[:2]:
+                sr = await search_triggered(
+                    "gap", gap_str, {"content": question},
+                )
+                if sr["triggered"] and sr["nodes_created"] > 0:
+                    search_nodes_added += sr["nodes_created"]
+                    if sr.get("search_fallback"):
+                        response["search_fallback"] = True
 
-        if fill_result["nodes_created"] > 0:
+        # Fall back to mother-based gap fill if search didn't help
+        fill_result = {"nodes_created": 0}
+        if search_nodes_added == 0:
+            from growth import fill_gaps
+            fill_result = await fill_gaps(
+                gaps, question, max_nodes=settings.max_gap_fill_nodes,
+            )
+        else:
+            fill_result["nodes_created"] = search_nodes_added
+
+        total_added = fill_result["nodes_created"]
+        if total_added > 0:
             # Track if web search fallback was used
             if fill_result.get("search_fallback"):
                 response["search_fallback"] = True
@@ -238,7 +255,7 @@ async def answer(question: str, auto_expand: bool = True,
             response["key_facts"] = new_result["key_facts"]
             response["gaps"] = new_result["gaps"]
             response["expanded"] = True
-            response["nodes_added"] = fill_result["nodes_created"]
+            response["nodes_added"] = total_added
             response["context_tokens"] = new_context["total_tokens"]
             response["timing"]["total_s"] = round(time.time() - t0, 2)
             response["timing"]["gap_fill_s"] = round(
@@ -250,7 +267,7 @@ async def answer(question: str, auto_expand: bool = True,
             new_conf = new_result.get("confidence", 1.0)
             new_gaps = new_result.get("gaps", [])
             new_llm_failed = any("parsing failed" in g for g in new_gaps)
-            if (fill_result["nodes_created"] > 0
+            if (total_added > 0
                     and not new_llm_failed
                     and new_conf < settings.auto_expand_threshold
                     and len(new_gaps) > 0

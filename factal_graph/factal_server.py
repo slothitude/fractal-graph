@@ -124,6 +124,29 @@ async def ingest_url(url: str) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
+@mcp.tool()
+async def search_and_ingest(query: str, parent_node_id: int = None,
+                            max_urls: int = None) -> str:
+    """Manual search trigger — search the web and ingest L4-L5 evidence nodes.
+
+    Uses web search to find real sources, then the mother model structures
+    results into fact (L4) and evidence (L5) nodes. Grounds the graph with
+    verifiable, sourced information. Rate-limited to 10/min.
+
+    Args:
+        query: Search query (e.g. "NATO Article 5 invocation history")
+        parent_node_id: Optional parent node to attach new nodes under
+        max_urls: Maximum URLs to search (default: 3)
+    """
+    from search_trigger import search_triggered
+    result = await search_triggered(
+        "manual", query, {"content": query},
+        parent_node_id=parent_node_id,
+        max_urls=max_urls,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
 # ============================================================
 # Mother Model Seeding
 # ============================================================

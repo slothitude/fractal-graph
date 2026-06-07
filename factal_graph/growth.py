@@ -448,6 +448,28 @@ async def curiosity_scan(max_expansions: int = 3) -> dict:
 
     expanded = []
     for sparse in sparse_nodes[:max_expansions]:
+        # L3+ leaf nodes: use search trigger for evidence grounding
+        if sparse["level"] >= 3 and settings.search_trigger_enabled:
+            from search_trigger import search_triggered
+            sr = await search_triggered(
+                "sparse_evidence", sparse["content"],
+                {"content": sparse["content"], "resolution_level": sparse["level"]},
+                parent_node_id=sparse["node_id"],
+            )
+            if sr["triggered"] and sr["nodes_created"] > 0:
+                expanded.append({
+                    "node_id": sparse["node_id"],
+                    "content": sparse["content"],
+                    "level": sparse["level"],
+                    "sparse_reason": sparse["sparse_reason"],
+                    "result": {
+                        "nodes_created": sr["nodes_created"],
+                        "method": "search_trigger",
+                    },
+                })
+                continue
+
+        # L0-L2 structural gaps: use mother-based seed_expand
         from seed import seed_expand as seed_expand_fn
         result = await seed_expand_fn(sparse["node_id"])
         if result.get("nodes_created", 0) > 0:
@@ -458,6 +480,7 @@ async def curiosity_scan(max_expansions: int = 3) -> dict:
                 "sparse_reason": sparse["sparse_reason"],
                 "result": {
                     "nodes_created": result.get("nodes_created", 0),
+                    "method": "mother_expand",
                 },
             })
 

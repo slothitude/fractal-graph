@@ -262,12 +262,37 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
     # Step 3: Compute bounding boxes bottom-up
     _compute_bboxes_for_subtree(conn, domain_id)
 
+    # Step 4: Post-seed evidence grounding (search for L3 nodes)
+    search_nodes_added = 0
+    if settings.search_trigger_enabled and depth >= 3:
+        from search_trigger import search_triggered
+        # Get L3 nodes under root for evidence grounding
+        children = db.get_children(conn, domain_id)
+        l3_nodes = []
+        for c in children:
+            if c["resolution_level"] == 3:
+                l3_nodes.append(c)
+            elif c["resolution_level"] < 3:
+                # Check grandchildren for L3
+                grandchildren = db.get_children(conn, c["id"])
+                l3_nodes.extend(g for g in grandchildren if g["resolution_level"] == 3)
+
+        for node in l3_nodes[:5]:  # Cap at 5
+            sr = await search_triggered(
+                "post_seed", node["content"],
+                {"content": node["content"], "resolution_level": node["resolution_level"]},
+                parent_node_id=node["id"],
+            )
+            if sr["triggered"]:
+                search_nodes_added += sr["nodes_created"]
+
     return {
         "topic": topic,
         "root_id": domain_id,
         "depth_reached": depth,
-        "nodes_created": len(created_nodes),
+        "nodes_created": len(created_nodes) + search_nodes_added,
         "edges_created": len(created_edges),
+        "search_grounding_nodes": search_nodes_added,
         "nodes": created_nodes,
     }
 
