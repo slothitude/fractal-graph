@@ -75,6 +75,13 @@ class Settings(BaseSettings):
         ".woff", ".woff2", ".ttf", ".eot", ".map", ".min.js", ".min.css", ".lock",
     ]
 
+    # SWE-bench evaluation harness
+    swe_bench_split: str = "verified_lite"
+    swe_bench_max_repos: int = 5
+    swe_bench_max_files_per_repo: int = 500
+    swe_bench_repo_cache: str = "data/swe_repos"
+    swe_bench_data_cache: str = "data/swe_bench"
+
     # Meeseeks system — task-scoped ephemeral souls
     meeseeks_max_concurrent: int = 5
     meeseeks_max_steps: int = 20

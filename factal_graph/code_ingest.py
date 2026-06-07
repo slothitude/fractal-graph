@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 # --- Regex patterns for code extraction ---
 
-_PY_CLASS_RE = re.compile(r'^(\s*)(class\s+(\w+)[^\n]*(?::)[^\n]*)', re.MULTILINE)
-_PY_FUNC_RE = re.compile(r'^(\s*)(async\s+)?def\s+(\w+)\s*\(([^)]*)\)', re.MULTILINE)
+_PY_CLASS_RE = re.compile(r'^([ \t]*)(class\s+(\w+)[^\n]*(?::)[^\n]*)', re.MULTILINE)
+_PY_FUNC_RE = re.compile(r'^([ \t]*)(async\s+)?def\s+(\w+)\s*\(([^)]*)\)', re.MULTILINE)
 _PY_IMPORT_RE = re.compile(
     r'^(?:from\s+([\w.]+)\s+import\s+(.+)|import\s+([\w.,\s]+))', re.MULTILINE
 )
@@ -37,7 +37,7 @@ _JS_FUNC_RE = re.compile(
     r'^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?)',
     re.MULTILINE
 )
-_JS_CLASS_RE = re.compile(r'^(?:export\s+)?class\s+(\w+)', re.MULTILINE)
+_JS_CLASS_RE = re.compile(r'^(?:export\s+)?(?:[ \t]*)(?:class\s+(\w+))', re.MULTILINE)
 
 # --- Skip patterns ---
 
@@ -380,13 +380,13 @@ def _extract_python(content: str, filepath: str) -> list[dict]:
             "filepath": filepath,
         })
 
-    # Extract top-level functions (skip methods inside classes)
-    # Collect class spans first so we can exclude methods
+    # Collect class spans with their names for method extraction
     class_spans = []
     for cm in _PY_CLASS_RE.finditer(content):
         c_start = content[:cm.start()].count("\n") + 1
         c_end = _find_block_end(lines, c_start - 1, 0)
-        class_spans.append((c_start, c_end))
+        cls_name = cm.group(3)
+        class_spans.append((c_start, c_end, cls_name))
 
     for m in _PY_FUNC_RE.finditer(content):
         func_name = m.group(3)
@@ -396,22 +396,39 @@ def _extract_python(content: str, filepath: str) -> list[dict]:
         sig = f"{prefix}def {func_name}({params})"
         start = content[:m.start()].count("\n") + 1
 
-        # Skip if inside a class span
-        if any(cs <= start < ce for cs, ce in class_spans):
-            continue
-
         docstring = _extract_docstring(content, m.end())
         end = _find_block_end(lines, start - 1, 0)
 
-        elements.append({
-            "name": func_name,
-            "type": "function",
-            "signature": sig,
-            "docstring": docstring,
-            "start_line": start,
-            "end_line": end,
-            "filepath": filepath,
-        })
+        # Check if inside a class span — extract as method
+        parent_class = None
+        for cs, ce, cls_name in class_spans:
+            if cs <= start < ce:
+                parent_class = cls_name
+                break
+
+        if parent_class:
+            # Extract as method with qualified name
+            elements.append({
+                "name": f"{parent_class}.{func_name}",
+                "type": "method",
+                "signature": sig,
+                "docstring": docstring,
+                "start_line": start,
+                "end_line": end,
+                "filepath": filepath,
+                "parent_class": parent_class,
+            })
+        else:
+            # Top-level function
+            elements.append({
+                "name": func_name,
+                "type": "function",
+                "signature": sig,
+                "docstring": docstring,
+                "start_line": start,
+                "end_line": end,
+                "filepath": filepath,
+            })
 
     return elements
 
@@ -482,7 +499,7 @@ def _find_block_end(lines: list[str], start_idx: int, base_indent: int) -> int:
     if start_idx >= len(lines):
         return len(lines)
 
-    # Determine this block's indent
+    # Look past the definition line to find the body indent
     first_nonblank = start_idx
     while first_nonblank < len(lines) and not lines[first_nonblank].strip():
         first_nonblank += 1
@@ -490,11 +507,18 @@ def _find_block_end(lines: list[str], start_idx: int, base_indent: int) -> int:
     if first_nonblank >= len(lines):
         return len(lines)
 
-    block_indent = len(lines[first_nonblank]) - len(lines[first_nonblank].lstrip())
-    if block_indent <= base_indent:
-        return first_nonblank + 1
+    body_idx = first_nonblank + 1
+    while body_idx < len(lines) and not lines[body_idx].strip():
+        body_idx += 1
 
-    end = first_nonblank + 1
+    if body_idx >= len(lines):
+        return len(lines)
+
+    body_indent = len(lines[body_idx]) - len(lines[body_idx].lstrip())
+    if body_indent <= base_indent:
+        return body_idx + 1
+
+    end = body_idx + 1
     while end < len(lines):
         line = lines[end]
         if line.strip():
@@ -722,6 +746,34 @@ def _ingest_file(conn, filepath: Path, parent_l1_id: int,
                 )
                 nodes += 1
                 db.insert_edge(conn, l2_id, l3_id, edge_type="contains", confidence=0.9)
+                edges += 1
+
+            elif elem["type"] == "method":
+                # L4: Method node — child of parent class L3 node
+                # Find the parent class L3 node for this file
+                parent_class = elem.get("parent_class", "")
+                docstring = elem.get("docstring", "")
+                content = f"{elem['signature']}"
+                if docstring:
+                    content += f" — {docstring[:200]}"
+
+                # We'll link to the class node later via a second pass.
+                # For now, store as L4 under the file L2 node.
+                method_id = db.insert_node(
+                    conn, content,
+                    resolution_level=4, parent_id=l2_id,
+                    confidence=0.8, soul_id=soul_id,
+                    metadata={
+                        "type": "method",
+                        "name": elem["name"],
+                        "parent_class": parent_class,
+                        "file": rel_path,
+                        "line": elem["start_line"],
+                        "end_line": elem.get("end_line", elem["start_line"]),
+                    },
+                )
+                nodes += 1
+                db.insert_edge(conn, l2_id, method_id, edge_type="contains", confidence=0.9)
                 edges += 1
 
                 # L5: Code snippet (first 10 lines of body)
