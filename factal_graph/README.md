@@ -21,127 +21,195 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 
 ```
                          SEEDING (one-time)
-               ┌─────────────────────────────────┐
-               │  Mother Model (lfm2.5:latest ~8B) │
-               │  Generates L0→L{depth} hierarchy  │
-               │  Computes bboxes + cross-res edges│
-               └───────────────┬─────────────────┘
-                               │
-                               ▼
-              ┌──────────────────────────────────────────┐
-              │              Fractal Graph                 │
-              │  SQLite (nodes, edges, bbox) + ChromaDB   │
-              │  Edges: supports, contradicts, refines     │
-              └──────────────────┬───────────────────────┘
-                                 │
-          ┌──────────────────────┼──────────────────────┐
-          │                      │                      │
-          ▼                      ▼                      ▼
-   ┌──────────────┐    ┌──────────────────┐    ┌──────────────┐
-   │ 2B Classifier│    │ 2B Reasoning     │    │ Judge Triad   │
-   │ (ingestion)  │    │ (ask pipeline)    │    │ Angel/Devil/  │
-   └──────────────┘    │ embed→classify→   │    │ Neutral       │
-                       │ gather→synthesize │    └──────────────┘
-                       └──────────────────┘
+               +-----------------------------------+
+               |  Mother Model (lfm2.5:gpu3, ~8B)   |
+               |  Generates L0->L{depth} hierarchy    |
+               |  Computes bboxes + cross-res edges   |
+               +-----------------+-----------------+
+                                 |
+                                 v
+              +------------------------------------------+
+              |              Fractal Graph                 |
+              |  SQLite (nodes, edges, bbox) + ChromaDB   |
+              |  Edges: supports, contradicts, refines     |
+              +-----------------+------------------------+
+                                |
+          +----------+----------+----------+
+          |          |          |          |
+          v          v          v          v
+   +-----------+ +----------+ +---------+ +-----------+
+   | 2B Runtime | | Distill  | | Enrich  | | Quality   |
+   | classify,  | | mother   | | cross-  | | triad,    |
+   | ask, judge | | extract  | | link    | | consistency|
+   +-----------+ +----------+ +---------+ +-----------+
+   +-----------+ +-----------+
+   | Web UI    | | Export/   |
+   | D3.js     | | Import    |
+   +-----------+ +-----------+
 
-              RUNTIME — all 2B, no mother model touched
+              RUNTIME — 2B for queries, mother only for seeding/expansion
 ```
 
 ### The Key Insight
 
-**The model's job is inference over structured data, not recall.** The mother model seeds once. The 2B model handles all runtime by reasoning over pre-built graph structure — classification via bbox containment, context assembly from vector search + graph traversal, answer synthesis from structured facts.
-
-### Performance
-
-| Operation        | Model | Time  |
-|------------------|-------|-------|
-| `ask()` (graph only) | 2B | ~4.9s |
-| `ask()` (with triad) | 2B x3 | ~11.9s |
-| Ingest classify  | 2B | ~2s |
-| `seed_topic()`   | Mother (lfm2.5) | ~5s |
-| `seed_expand()`  | Mother (lfm2.5) | ~15s |
+**The model's job is inference over structured data, not recall.** The mother model seeds once. The 2B model handles all runtime by reasoning over pre-built graph structure -- classification via bbox containment, context assembly from vector search + graph traversal, answer synthesis from structured facts.
 
 ## Files
 
 | File              | Purpose |
 |-------------------|---------|
-| `config.py`       | Settings — DB paths, Ollama URLs, model config, token budgets |
-| `db.py`           | SQLite — nodes, edges, bbox, metadata |
-| `graph.py`        | Graph ops — bbox computation, subtree, contradictions, propagation |
-| `seed.py`         | Mother seeding — hierarchy generation, gap fill, search+seed |
-| `ingest.py`       | Ingest pipeline — search/extract (from searchMCP), heuristic classification, node insertion |
-| `embedder.py`     | Ollama embedding — async embed + sync fallback + batch |
-| `chroma_store.py` | ChromaDB — one collection per level, concurrent-access safe |
-| `context.py`      | Context assembler — gather, walk graph, format for LLM, bbox level placement |
-| `reasoning.py`    | 2B reasoning — classify question, synthesize answer, auto-expand |
-| `growth.py`       | Autonomous expansion — gap fill, enrichment, curiosity scan |
-| `judges.py`       | Judge triad — Angel/Devil/Neutral two-pass with conflict detection |
-| `query.py`        | Query engine — specificity classification, drill-down, multi-level search |
-| `gql.py`          | Structured queries — contradictions, evidence, entity comparison |
-| `bench.py`        | Benchmark — 5 modes x 8 questions |
-| `factal_server.py`| MCP server — 20 tools via FastMCP stdio |
+| `config.py`       | Settings -- DB paths, Ollama URLs, model config, token budgets |
+| `db.py`           | SQLite -- nodes, edges, bbox, metadata, export/import |
+| `graph.py`        | Graph ops -- bbox computation, subtree, contradictions, propagation |
+| `seed.py`         | Mother seeding -- hierarchy generation, gap fill, search+seed |
+| `distill.py`      | Distillation -- 3-phase mother knowledge extraction (GENERATE, EMBED, STORE) |
+| `enrich.py`       | Enrichment -- knowledge probes, node enrichment, cross-linking |
+| `quality.py`      | Quality gate -- self-consistency, triad scan, source attribution |
+| `ingest.py`       | Ingest pipeline -- search/extract (from searchMCP), heuristic classification |
+| `embedder.py`     | Ollama embedding -- async embed + sync fallback + batch |
+| `chroma_store.py` | ChromaDB -- one collection per level, concurrent-access safe |
+| `model_cache.py`  | Model load state cache -- avoids cold-starts on repeated calls |
+| `context.py`      | Context assembler -- gather, walk graph, format for LLM, bbox level placement |
+| `reasoning.py`    | 2B reasoning -- classify question, synthesize answer, auto-expand |
+| `growth.py`       | Autonomous expansion -- gap fill, enrichment, curiosity scan |
+| `judges.py`       | Judge triad -- Angel/Devil/Neutral two-pass with conflict detection |
+| `query.py`        | Query engine -- specificity classification, drill-down, multi-level search |
+| `gql.py`          | Structured queries -- contradictions, evidence, entity comparison |
+| `bench.py`        | Benchmark -- 5 modes x 8 questions |
+| `web_ui.py`       | Flask Web UI -- graph visualization, search, export/import endpoints |
+| `templates/index.html` | D3.js force-directed graph, side panel, search, export/import buttons |
+| `factal_server.py`| MCP server -- 30 tools via FastMCP stdio |
 
 ### External Dependencies
-- **searchMCP** (`C:/Users/aaron/searchmcp/core.py`) — search + text extraction via SearXNG fan-out and trafilatura/BeautifulSoup. Loaded via isolated import to avoid `config.py` naming conflict.
+- **searchMCP** (`C:/Users/aaron/searchmcp/core.py`) -- search + text extraction via SearXNG fan-out and trafilatura/BeautifulSoup.
 
-## MCP Tools (20 total)
+## MCP Tools (30 total)
 
-### Ask — 2B Reasoning
-- `ask(question, auto_expand)` — Primary tool. embed -> classify (2B) -> gather context -> synthesize (2B). Optional auto-expand on low confidence.
+### Ask -- 2B Reasoning
+- `ask(question, auto_expand)` -- Primary tool. embed -> classify (2B) -> gather context -> synthesize (2B). Optional auto-expand on low confidence.
 
 ### Knowledge Ingest
-- `add_node(content, resolution_level, parent_id, confidence, source_url, metadata)` — Manual node
-- `add_edge(from_node_id, to_node_id, edge_type, confidence, context)` — Manual edge
-- `web_ingest(query, max_urls)` — SearXNG -> extract -> classify -> insert (via searchMCP)
-- `ingest_url(url)` — Fetch URL, chunk, classify, insert
+- `add_node(content, resolution_level, parent_id, confidence, source_url, metadata)` -- Manual node
+- `add_edge(from_node_id, to_node_id, edge_type, confidence, context)` -- Manual edge
+- `web_ingest(query, max_urls)` -- SearXNG -> extract -> classify -> insert (via searchMCP)
+- `ingest_url(url)` -- Fetch URL, chunk, classify, insert
 
 ### Mother Model Seeding
-- `seed_topic(topic, depth, mother_model)` — L0-L{depth} hierarchy from scratch
-- `seed_from_search(query, max_urls, mother_model)` — Web search + mother structuring
-- `seed_expand(node_id, mother_model)` — Expand sparse node, fill missing levels
+- `seed_topic(topic, depth, mother_model)` -- L0-L{depth} hierarchy from scratch
+- `seed_from_search(query, max_urls, mother_model)` -- Web search + mother structuring
+- `seed_expand(node_id, mother_model)` -- Expand sparse node, fill missing levels
 
-### Query / Retrieval
-- `query_graph(prompt, resolution_hint)` — Resolution-aware zoom query
-- `drill_down(node_id, target_resolution)` — Traverse hierarchy downward
-- `search_nodes(query_text, resolution_level)` — Semantic search within level or all
-- `get_node(node_id)` — Full node with children, parents, edges
+### Distillation -- Mother Model Knowledge Extraction
+- `distill_topic(topic, mother_model)` -- Extract entities/facts/evidence from mother's parametric knowledge
+- `distill_domains(domains, mother_model)` -- Batch distill multiple domains (or all ~30)
+- `distill_coverage()` -- Show graph coverage, nodes per level, shallow branches, gaps
 
-### Graph Operations
-- `get_subtree(node_id, max_depth)` — Extract self-similar subgraph
-- `find_contradictions()` — All CONTRADICTS/CHALLENGES/resolution_conflict edges
-- `propagate_confidence(node_id)` — Bottom-up confidence propagation
-- `graph_stats()` — Nodes/edges per level, ChromaDB coverage
+### Enrichment -- Cross-linking + Knowledge Probes
+- `enrich_probe(topic)` -- Compare mother model knowledge vs graph coverage
+- `enrich_node(node_id)` -- Ask mother "what else relates?" and insert siblings/children
+- `cross_link(node_id_a, node_id_b)` -- Ask mother if two nodes are related, create edge
+- `auto_crosslink(domain_node_id, max_pairs)` -- Batch cross-link L1 topics under same L0
+
+### Quality Gate
+- `self_consistency_check(node_id, num_rounds, min_consensus)` -- Ask mother 3x, keep consensus facts
+- `quality_triad_scan(domain_node_id)` -- Angel/Devil on L0 domains to catch hallucinations
+- `source_attribution(domain_node_id)` -- Mother rates sourceability, demotes unattributed facts
 
 ### Judge Triad
-- `judge_topic(topic, top_k)` — Angel (L0-L1, optimistic) / Devil (L4-L5, adversarial) / Neutral (L2-L3, bridging). Disagreements -> resolution_conflict edges.
+- `judge_topic(topic, top_k)` -- Angel (L0-L1, optimistic) / Devil (L4-L5, adversarial) / Neutral (L2-L3, bridging). Disagreements -> resolution_conflict edges.
+
+### Query / Retrieval
+- `query_graph(prompt, resolution_hint)` -- Resolution-aware zoom query
+- `drill_down(node_id, target_resolution)` -- Traverse hierarchy downward
+- `search_nodes(query_text, resolution_level)` -- Semantic search within level or all
+- `get_node(node_id)` -- Full node with children, parents, edges
+
+### Graph Operations
+- `get_subtree(node_id, max_depth)` -- Extract self-similar subgraph
+- `find_contradictions()` -- All CONTRADICTS/CHALLENGES/resolution_conflict edges
+- `propagate_confidence(node_id)` -- Bottom-up confidence propagation
+- `graph_stats()` -- Nodes/edges per level, ChromaDB coverage
+
+### Export / Import
+- `export_graph()` -- Export entire graph as portable JSON (no embeddings)
+- `import_graph(data, merge)` -- Import from JSON. merge=True preserves existing data, re-indexes ChromaDB
+
+## Web UI
+
+Flask + D3.js force-directed graph on port 8018:
+
+```bash
+python web_ui.py
+```
+
+Features:
+- **Interactive graph** -- zoom, pan, click nodes for detail panel (children, connections, metadata)
+- **Search** -- text search across all nodes with instant highlighting
+- **Color-coded levels** -- L0 Domain (red) through L5 Evidence (purple)
+- **Edge coloring** -- related (gray), refines (teal), contradicts (red), supports (green), resolution_conflict (orange dashed)
+- **Export button** -- downloads graph as date-stamped JSON file
+- **Import button** -- upload JSON file, replaces graph, auto-reloads
+
+### Web UI API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | D3.js graph visualization |
+| `/api/graph` | GET | Full graph as `{nodes, links}` |
+| `/api/stats` | GET | Node/edge counts per level |
+| `/api/node/:id` | GET | Node details with children, parent, edges |
+| `/api/search?q=` | GET | Text search (LIKE, case-insensitive) |
+| `/api/domains` | GET | L0 domains with child counts |
+| `/api/export` | GET | Download full graph as JSON |
+| `/api/import` | POST | Upload JSON to import (multipart file) |
+
+## Export/Import Format
+
+```json
+{
+  "version": 1,
+  "exported_at": "2026-06-07T...",
+  "stats": { "total_nodes": 172, "total_edges": 201 },
+  "nodes": [
+    { "id": 1, "content": "...", "resolution_level": 0, "parent_id": null,
+      "confidence": 0.5, "bbox": [...], "source_url": null, "metadata": {...} }
+  ],
+  "edges": [
+    { "id": 1, "from_node_id": 1, "to_node_id": 2, "edge_type": "related",
+      "from_resolution": 0, "to_resolution": 1, "confidence": 0.5, "context": null }
+  ]
+}
+```
+
+Embeddings are excluded -- regenerate via `web_ingest`, `seed_from_search`, or the MCP `import_graph` tool (which re-indexes ChromaDB automatically).
 
 ## Reasoning Pipeline
 
 ```
 User Question
-    │
-    ▼
-[1] EMBED — nomic-embed-text
-    │
-    ▼
-[2] CLASSIFY — 2B classifies: factual | analytical | comparative | exploratory | yes_no
-    │
-    ▼
-[3] GATHER — search all 6 levels, walk graph, rank by sim+confidence+edges
-    │  Token budget: 2048 tokens
-    │
-    ▼
-[4] SYNTHESIZE — 2B generates answer from structured context
-    │  Returns: answer, confidence, key_facts, gaps
-    │
-    ▼
+    |
+    v
+[1] EMBED -- nomic-embed-text
+    |
+    v
+[2] CLASSIFY -- 2B classifies: factual | analytical | comparative | exploratory | yes_no
+    |
+    v
+[3] GATHER -- search all 6 levels, walk graph, rank by sim+confidence+edges
+    |  Token budget: 2048 tokens
+    |
+    v
+[4] SYNTHESIZE -- 2B generates answer from structured context
+    |  Returns: answer, confidence, key_facts, gaps
+    |
+    v
 [5] AUTO-EXPAND (if confidence < threshold)
-    │  gap fill -> if mother fails -> web search fallback
-    │
-    ▼
+    |  gap fill -> if mother fails -> web search fallback
+    |
+    v
 [6] RE-SYNTHESIZE with enriched context
-    │
-    ▼
+    |
+    v
 Answer + confidence + gaps + timing
 ```
 
@@ -150,8 +218,8 @@ Answer + confidence + gaps + timing
 | Mode | Avg Time | Avg Conf | Notes |
 |------|----------|----------|-------|
 | 2B+Graph | 4.9s | 0.60 | Fast, decent |
-| 2B alone | 3.6s | — | No confidence metric |
-| Mother alone | 19.7s | — | Empty JSON ~40% |
+| 2B alone | 3.6s | -- | No confidence metric |
+| Mother alone | 19.7s | -- | Empty JSON ~40% |
 | 2B+Graph+Expand | 65.6s | 0.77 | Mother warmup dominates |
 | **2B+Graph+Triad** | **11.9s** | **0.84** | Best quality/speed |
 
@@ -165,11 +233,10 @@ All settings via environment variables with `FRACTAL_` prefix:
 | `FRACTAL_CHROMA_PATH` | `data/chroma` | ChromaDB path |
 | `FRACTAL_OLLAMA_URL` | `http://100.84.161.63:11434` | Ollama endpoint |
 | `FRACTAL_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
-| `FRACTAL_SEARXNG_URL` | `http://100.84.161.63:8888` | SearXNG (unused — uses searchMCP) |
 | `FRACTAL_LLM_URL` | `http://100.84.161.63:11434` | 2B classifier endpoint |
 | `FRACTAL_LLM_MODEL` | `qwen3.5:2b` | Runtime classifier |
 | `FRACTAL_MOTHER_URL` | `http://100.84.161.63:11434` | Mother model endpoint |
-| `FRACTAL_MOTHER_MODEL` | `lfm2.5:latest` | Mother model (seeding) |
+| `FRACTAL_MOTHER_MODEL` | `lfm2.5:gpu3` | Mother model (seeding) |
 
 ## Edge Types
 
@@ -188,12 +255,13 @@ All settings via environment variables with `FRACTAL_` prefix:
 ## Setup
 
 ```bash
-pip install fastmcp chromadb httpx pydantic-settings trafilatura
+pip install -r requirements.txt
 
-# Ollama needs: nomic-embed-text, qwen3.5:2b, lfm2.5:latest
+# Ollama needs: nomic-embed-text, qwen3.5:2b, lfm2.5:gpu3
 # searchMCP needs: running at C:/Users/aaron/searchmcp/ (for core.py import)
 
-python factal_server.py  # FastMCP stdio
+python factal_server.py  # FastMCP stdio (MCP server)
+python web_ui.py        # Flask Web UI on port 8018
 ```
 
 ## Quick Start
@@ -202,7 +270,7 @@ python factal_server.py  # FastMCP stdio
 # 1. Seed a topic with the mother model
 seed_topic("climate change", depth=3)
 
-# 2. Ask a question — 2B reasoning over graph context
+# 2. Ask a question -- 2B reasoning over graph context
 ask("Why does climate change affect biodiversity?")
 
 # 3. Run judge triad for higher confidence
@@ -213,4 +281,10 @@ seed_from_search("quantum computing breakthroughs 2026")
 
 # 5. Expand a sparse node
 seed_expand(node_id=7)
+
+# 6. Export/backup the graph
+export_graph()
+
+# 7. Import (restores + re-indexes embeddings)
+import_graph(json_string, merge=True)
 ```
