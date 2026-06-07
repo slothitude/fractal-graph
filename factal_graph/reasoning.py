@@ -313,3 +313,252 @@ async def answer_with_triad(question: str) -> dict:
     result["timing"]["total_with_triad_s"] = round(time.time() - t0, 2)
     result["triad"] = triad
     return result
+
+
+# --- Agent Decision Mode ---
+
+def _gather_procedural_context(prompt_embedding: list[float], top_k: int = 5,
+                               max_tokens: int = 4000) -> dict:
+    """Gather context biased toward L2-L4 (patterns, rules, examples).
+
+    Unlike gather_context which hits all 6 levels equally, this focuses
+    on the resolution levels most useful for agent decisions:
+    - L2: decision patterns (IF/THEN rule types)
+    - L3: concrete examples (specific scenarios)
+    - L4: specific rules (exact conditions, actions, outcomes)
+
+    Weighting: 0.5*L2 + 0.3*L3 + 0.2*L4
+
+    Returns:
+        Same format as gather_context: {direct_hits, parents, edges, total_tokens}
+    """
+    from chroma_store import query_level
+    import db as db_mod
+
+    conn = db_mod.get_db()
+    max_tokens = max_tokens or settings.max_context_tokens
+
+    # Query L2, L3, L4 specifically
+    level_weights = {2: 0.5, 3: 0.3, 4: 0.2}
+    direct_hits = []
+    seen_ids = set()
+
+    for level, weight in level_weights.items():
+        hits = query_level(prompt_embedding, level, n_results=top_k)
+        for hit in hits:
+            node_id = int(hit["node_id"])
+            if node_id in seen_ids:
+                continue
+            node = db_mod.get_node(conn, node_id)
+            if not node:
+                continue
+            seen_ids.add(node_id)
+            edges = db_mod.get_edges(conn, node_id)
+            direct_hits.append({
+                "node": node,
+                "distance": hit.get("distance", 1.0),
+                "edges": edges,
+                "score": 0.0,
+                "level_weight": weight,
+            })
+
+    # Walk parent chains
+    parents = []
+    parent_seen = set()
+    for hit in direct_hits:
+        node = hit["node"]
+        current = node
+        while current.get("parent_id") and current["parent_id"] not in parent_seen:
+            pid = current["parent_id"]
+            parent = db_mod.get_node(conn, pid)
+            if not parent:
+                break
+            parent_seen.add(pid)
+            parents.append(parent)
+            current = parent
+
+    # Rank: 0.4*vector_sim + 0.3*confidence + 0.2*level_weight + 0.1*edge_count
+    for hit in direct_hits:
+        vector_sim = max(0, 1.0 - hit["distance"])
+        confidence = hit["node"].get("confidence", 0.5)
+        edge_count = len(hit["edges"])
+        hit["score"] = (
+            0.4 * vector_sim +
+            0.3 * confidence +
+            0.2 * hit["level_weight"] +
+            0.1 * min(edge_count / 3.0, 1.0)
+        )
+
+    direct_hits.sort(key=lambda x: x["score"], reverse=True)
+
+    # Token-budget truncation
+    budget_remaining = max_tokens
+    result = {"direct_hits": [], "parents": [], "edges": [], "total_tokens": 0}
+
+    def _add_node(entry, node_list):
+        nonlocal budget_remaining
+        node = entry["node"] if isinstance(entry, dict) and "node" in entry else entry
+        content = node.get("content", "")
+        text = f"- [ID:{node['id']} L{node['resolution_level']} conf:{node['confidence']:.2f}] {content}"
+        tokens = len(text) // 4
+        if tokens <= budget_remaining:
+            node_list.append(text)
+            budget_remaining -= tokens
+            return True
+        return False
+
+    for hit in direct_hits:
+        if not _add_node(hit, result["direct_hits"]):
+            break
+    for parent in parents[:5]:
+        if not _add_node(parent, result["parents"]):
+            break
+
+    result["total_tokens"] = max_tokens - budget_remaining
+    return result
+
+
+async def decide_synthesize(situation: str, options: list[str],
+                            context_str: str) -> dict:
+    """2B generates a decision from procedural context.
+
+    Returns:
+        {action, reasoning, confidence, relevant_patterns, risks, option_scores}
+    """
+    options_text = ""
+    if options:
+        options_text = (
+            "\n\nCandidate actions to evaluate:\n" +
+            "".join(f"  {i+1}. {o}\n" for i, o in enumerate(options))
+        )
+
+    prompt = (
+        "You are a decision-making agent. Given the situation and procedural "
+        "knowledge context below, recommend the BEST action to take.\n\n"
+        "Do NOT use outside knowledge. Base your decision ONLY on the provided context.\n\n"
+        f"Situation: {situation}\n"
+        f"{options_text}\n\n"
+        f"{context_str}\n\n"
+        "Based ONLY on the context above, recommend an action.\n"
+        "Return JSON:\n"
+        '{\n'
+        '  "action": "the recommended action (concise, executable)",\n'
+        '  "reasoning": "why this action is best, referencing specific patterns from context",\n'
+        '  "confidence": 0.0-1.0,\n'
+        '  "relevant_patterns": ["pattern1 from context", "pattern2"],\n'
+        '  "risks": ["risk1", "risk2"]'
+    )
+    if options:
+        prompt += (
+            ',\n'
+            '  "option_scores": {"action text": 0.0-1.0}'
+        )
+    prompt += (
+        "\n}\n\n"
+        "Rules:\n"
+        "- Only use patterns/rules present in the context\n"
+        "- If context is empty, propose a reasonable default action with low confidence\n"
+        "- Always list at least one risk\n"
+        "- Keep reasoning under 3 sentences\n"
+    )
+
+    raw = await _llm_call(prompt, num_predict=settings.max_answer_tokens, timeout=30.0)
+    parsed = _parse_json(raw)
+
+    if not parsed or "action" not in parsed:
+        # Fallback extraction
+        raw = re.sub(r"</?think\s*>", "", raw).strip()
+        answer_text = raw.strip()[:500] if raw else "Failed to generate decision"
+        return {
+            "action": answer_text,
+            "reasoning": "JSON parsing failed",
+            "confidence": 0.3,
+            "relevant_patterns": [],
+            "risks": ["Decision generation failed"],
+            "option_scores": {},
+        }
+
+    parsed.setdefault("reasoning", "")
+    parsed.setdefault("confidence", 0.5)
+    parsed.setdefault("relevant_patterns", [])
+    parsed.setdefault("risks", [])
+    parsed.setdefault("option_scores", {})
+    return parsed
+
+
+async def decide(situation: str, options: list[str] = None) -> dict:
+    """Given a situation and optional options, retrieve procedural knowledge
+    and recommend an action via 2B + triad.
+
+    Pipeline: embed -> gather_procedural_context (L2-L4 biased) -> decide_synthesize (2B)
+    -> judge_topic (triad) -> judge_answer -> return structured decision.
+
+    Args:
+        situation: Description of the situation the agent faces
+        options: Optional list of candidate actions to evaluate
+
+    Returns:
+        {situation, action, reasoning, confidence, relevant_patterns, risks,
+         option_scores, timing, triad}
+    """
+    import time
+    from judges import judge_topic, judge_answer
+
+    t0 = time.time()
+
+    # Step 1: Embed
+    t1 = time.time()
+    embedding = await embed(situation)
+    embed_time = time.time() - t1
+
+    # Step 2: Gather procedural context (L2-L4 biased)
+    t2 = time.time()
+    context = _gather_procedural_context(
+        embedding, top_k=5, max_tokens=settings.max_context_tokens,
+    )
+    context_str = format_context_for_llm(context)
+    context_time = time.time() - t2
+
+    # Step 3: Synthesize decision (2B)
+    t3 = time.time()
+    decision = await decide_synthesize(situation, options or [], context_str)
+    synthesize_time = time.time() - t3
+
+    # Step 4: Run triad automatically (every decide() gets triad judgment)
+    t4 = time.time()
+    triad = await judge_topic(situation)
+    triad_time = time.time() - t4
+
+    # Step 5: Judge answer with triad context
+    t5 = time.time()
+    triad_answer = await judge_answer(situation, triad)
+    judge_time = time.time() - t5
+
+    # Use triad answer confidence if higher
+    triad_conf = triad_answer.get("confidence", 0)
+    if triad_conf > decision.get("confidence", 0):
+        decision["action"] = triad_answer["answer"]
+        decision["reasoning"] = triad_answer.get("reasoning", decision["reasoning"])
+        decision["confidence"] = triad_conf
+
+    total_time = time.time() - t0
+
+    return {
+        "situation": situation,
+        "action": decision["action"],
+        "reasoning": decision["reasoning"],
+        "confidence": decision["confidence"],
+        "relevant_patterns": decision["relevant_patterns"],
+        "risks": decision["risks"],
+        "option_scores": decision["option_scores"],
+        "context_tokens": context["total_tokens"],
+        "timing": {
+            "embed_s": round(embed_time, 2),
+            "context_gather_s": round(context_time, 2),
+            "synthesize_s": round(synthesize_time, 2),
+            "triad_s": round(triad_time, 2),
+            "judge_s": round(judge_time, 2),
+            "total_s": round(total_time, 2),
+        },
+        "triad": triad,
+    }

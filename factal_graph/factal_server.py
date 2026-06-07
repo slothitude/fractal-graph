@@ -6,10 +6,10 @@ import db
 import graph
 from config import settings
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
-from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
+from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn, seed_agent_topic as seed_agent_topic_fn
 from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
-from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn
+from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn, decide as decide_fn
 from growth import curiosity_scan as curiosity_scan_fn
 from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
@@ -165,6 +165,22 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None) -> st
         mother_model: Override mother model (default: lfm2.5:latest, ~8B)
     """
     result = await seed_topic_fn(topic, depth=depth, mother_model=mother_model)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None) -> str:
+    """Seed an agent procedural knowledge domain (how to act, not what is true).
+
+    Uses decision-rule prompts instead of factual ones. Higher default depth (4)
+    and confidence (0.8) since agents need reliable procedural knowledge.
+
+    Args:
+        topic: Agent domain to seed (e.g. 'task decomposition for AI agents')
+        depth: Maximum resolution depth (default 4)
+        mother_model: Override mother model (default: lfm2.5:gpu3)
+    """
+    result = await seed_agent_topic_fn(topic, depth=depth, mother_model=mother_model)
     return json.dumps(result, indent=2, default=str)
 
 
@@ -516,6 +532,23 @@ async def ask_with_triad(question: str) -> str:
         question: Your question (e.g. "Why did Russia oppose NATO expansion?")
     """
     result = await answer_with_triad_fn(question)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def decide(situation: str, options: str = "") -> str:
+    """Agent decision mode — retrieve procedural knowledge and recommend an action.
+
+    Unlike ask() which returns explanations, decide() returns structured actions
+    the agent can execute directly. Biases toward L2-L4 (patterns and rules).
+    Automatically runs judge triad (Angel=planner, Devil=risks, Neutral=evidence).
+
+    Args:
+        situation: The situation the agent faces
+        options: Optional comma-separated list of candidate actions
+    """
+    opt_list = [o.strip() for o in options.split(",") if o.strip()] if options else []
+    result = await decide_fn(situation, options=opt_list if opt_list else None)
     return json.dumps(result, indent=2, default=str)
 
 

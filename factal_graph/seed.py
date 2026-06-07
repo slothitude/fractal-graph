@@ -206,6 +206,27 @@ LEVEL_MEANINGS = {
     5: "evidence — cited source, quote, or data point (e.g. a specific statistic or statement)",
 }
 
+AGENT_LEVEL_MEANINGS = {
+    0: "domain — broad capability area (e.g. 'task decomposition for AI agents')",
+    1: "major strategy — a named approach category (e.g. 'top-down decomposition')",
+    2: "decision pattern — IF/THEN rule type (e.g. 'when task is ambiguous, start with clarification')",
+    3: "concrete example — specific scenario with context (e.g. 'user says \"fix the login\" without specifying what is broken')",
+    4: "specific rule — exact condition, action, expected outcome (e.g. 'IF tool returns schema error THEN re-read docs before retry')",
+    5: "edge case — failure mode, recovery path, or anti-pattern (e.g. 'agent enters infinite clarification loop — set max 3 rounds then proceed with best guess')",
+}
+
+AGENT_SEED_PROMPT = """Seed the knowledge domain: "{topic}"
+
+This graph will be used by small 2B AI agents making decisions at runtime.
+Focus on PROCEDURAL knowledge — how to act, not what is true:
+- Decision rules  (IF condition THEN action)
+- Pattern recognition  (this situation = this response type)
+- Failure modes  (what goes wrong and why)
+- Tradeoffs  (approach A vs B, when each is better)
+- Recovery sequences  (step 1, check, step 2, check...)
+
+NOT factual descriptions. Agents need to know how to act."""
+
 
 # --- Core seeding functions ---
 
@@ -299,7 +320,8 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
     # Step 2+: Expand recursively down to target depth
     await _expand_level(
         conn, topic, domain_id, domain_text, 0, depth,
-        mother_model, confidence, created_nodes, created_edges
+        mother_model, confidence, created_nodes, created_edges,
+        level_meanings=LEVEL_MEANINGS,
     )
 
     # Step 3: Compute bounding boxes bottom-up
@@ -340,24 +362,94 @@ async def seed_topic(topic: str, depth: int = 3, mother_model: str = None,
     }
 
 
+async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None,
+                           confidence: float = 0.8) -> dict:
+    """Seed an agent procedural knowledge domain.
+
+    Uses AGENT_SEED_PROMPT + AGENT_LEVEL_MEANINGS instead of factual ones.
+    Default depth=4 and confidence=0.8 (higher than factual — agents need reliable rules).
+
+    Args:
+        topic: Agent capability domain to seed
+        depth: Maximum resolution depth (default 4)
+        mother_model: Override mother model
+        confidence: Default confidence (default 0.8)
+
+    Returns:
+        Summary with node IDs, edges created, levels populated
+    """
+    conn = db.get_db()
+    created_nodes = []
+    created_edges = []
+    depth = min(max(depth, 1), 5)
+
+    # Step 1: Generate L0 domain node with agent seed prompt
+    domain_prompt = (
+        AGENT_SEED_PROMPT.format(topic=topic) + "\n\n"
+        "Generate a single broad capability domain summary.\n"
+        "The domain should be the broadest possible capability area — "
+        "what agents need to know how to do. Under 50 words. No quotes.\n\n"
+        'Return JSON: {"domain": "your capability domain summary here"}'
+    )
+    domain_result = _parse_json_object(await _mother_generate(domain_prompt, mother_model))
+    if not domain_result or "domain" not in domain_result:
+        return {"error": "Mother model failed to generate domain node", "raw": domain_result}
+
+    domain_text = domain_result["domain"]
+    domain_emb = await embed(domain_text)
+    domain_id = db.insert_node(
+        conn, domain_text, resolution_level=0, confidence=confidence
+    )
+    upsert_node(domain_id, domain_text, domain_emb, 0, None, confidence)
+    created_nodes.append({"id": domain_id, "level": 0, "content": domain_text})
+
+    # Step 2+: Expand recursively with agent level meanings
+    await _expand_level(
+        conn, topic, domain_id, domain_text, 0, depth,
+        mother_model, confidence, created_nodes, created_edges,
+        level_meanings=AGENT_LEVEL_MEANINGS,
+        seed_prompt=AGENT_SEED_PROMPT,
+    )
+
+    # Step 3: Compute bounding boxes bottom-up
+    _compute_bboxes_for_subtree(conn, domain_id)
+
+    return {
+        "topic": topic,
+        "type": "agent_procedural",
+        "root_id": domain_id,
+        "depth_reached": depth,
+        "nodes_created": len(created_nodes),
+        "edges_created": len(created_edges),
+        "nodes": created_nodes,
+    }
+
+
 async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
                        parent_level: int, max_depth: int, mother_model: str,
-                       confidence: float, created_nodes: list, created_edges: list):
+                       confidence: float, created_nodes: list, created_edges: list,
+                       level_meanings: dict = None,
+                       seed_prompt: str = ""):
     """Expand a node into children at the next resolution level."""
     next_level = parent_level + 1
     if next_level > max_depth:
         return
 
+    meanings = level_meanings or LEVEL_MEANINGS
+
     # Determine child count based on level
     child_counts = {1: (3, 5), 2: (2, 4), 3: (2, 4), 4: (1, 3), 5: (1, 2)}
     min_children, max_children = child_counts.get(next_level, (2, 3))
 
-    expand_prompt = (
+    expand_prompt = ""
+    if seed_prompt:
+        expand_prompt += seed_prompt.format(topic=topic) + "\n\n"
+    expand_prompt += (
         f"Expand this knowledge graph node into {min_children}-{max_children} children "
         f"at resolution level {next_level}.\n\n"
         f"Level meanings:\n"
     )
-    for lvl, meaning in LEVEL_MEANINGS.items():
+    for lvl, meaning in meanings.items():
         expand_prompt += f"  L{lvl}: {meaning}\n"
 
     expand_prompt += (
@@ -418,7 +510,9 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
             conn, topic, node_id,
             [n["content"] for n in created_nodes if n["id"] == node_id][0] if any(n["id"] == node_id for n in created_nodes) else "",
             next_level, max_depth, mother_model, confidence,
-            created_nodes, created_edges
+            created_nodes, created_edges,
+            level_meanings=level_meanings,
+            seed_prompt=seed_prompt,
         )
 
 
