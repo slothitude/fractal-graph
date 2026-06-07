@@ -20,39 +20,13 @@ from context import gather_context, format_context_for_llm
 
 
 async def _warmup_model(model: str, url: str) -> float:
-    """Trigger model load with a dummy generate.
+    """Trigger model load with a dummy generate. Uses shared model cache.
 
     Returns:
         Load time in seconds.
     """
-    import time
-    t0 = time.time()
-
-    # Check if model is already loaded (skip dummy generate if so)
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{url}/api/ps")
-            if any(m["name"] == model for m in resp.json().get("models", [])):
-                elapsed = round(time.time() - t0, 1)
-                print(f"         warmup {model}: {elapsed}s (cached)")
-                return elapsed
-    except Exception:
-        pass
-
-    # Kick off a dummy generate to trigger loading
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            await client.post(
-                f"{url}/api/generate",
-                json={"model": model, "prompt": ".", "stream": False,
-                      "options": {"num_predict": 1}, "think": False},
-            )
-    except Exception:
-        pass
-
-    elapsed = round(time.time() - t0, 1)
-    print(f"         warmup {model}: {elapsed}s")
-    return elapsed
+    from model_cache import ensure_model_loaded
+    return await ensure_model_loaded(model, url)
 
 
 async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,

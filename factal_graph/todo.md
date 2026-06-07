@@ -93,9 +93,16 @@
 
 ---
 
+### Phase 10: Performance + Polish
+- [x] Cache model load state to avoid cold-starts on repeated calls
+- [x] Parallelize LLM calls in seed pipeline with asyncio.gather
+- [x] Investigate sea level rise triad anomaly (24.8s pass1, low confidence)
+- [x] Judge triad integration with Pantheon council/court (MCP tools already exposed — Pantheon side needs update to call `judge_topic`/`judge_answer` as research source)
+- [x] Distill more domains to lift avg confidence across all topics (NATO-Russia +30, Climate +25, AI/ML +25 → 172 nodes, 201 edges, 5 L0 domains)
+
+---
+
 ## Outstanding (future, lower priority)
-- Cache model load state to avoid cold-starts on repeated calls
-- Parallelize LLM calls in seed pipeline with asyncio.gather
-- Investigate sea level rise triad anomaly (24.8s pass1, low confidence)
-- Judge triad integration with Pantheon council/court
-- Distill more domains to lift avg confidence across all topics
+- Web UI for graph visualization
+- Export/import graph to JSON/Neo4j format
+- Persistent cron-based auto-distillation (distill new domains periodically)

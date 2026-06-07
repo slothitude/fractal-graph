@@ -42,18 +42,9 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
     model = model or settings.mother_model
     url = settings.mother_url
 
-    # Warmup: trigger load
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            await client.post(
-                f"{url}/api/chat",
-                json={"model": model,
-                      "messages": [{"role": "user", "content": "."}],
-                      "stream": False,
-                      "options": {"num_predict": 1}},
-            )
-    except Exception:
-        pass
+    # Warmup: skip if already loaded (uses shared cache with TTL)
+    from model_cache import ensure_model_loaded
+    await ensure_model_loaded(model, url)
 
     # Use /api/chat — lfm2-thinking parser auto-separates thinking into .thinking field
     # No "format": "json" needed — it causes lfm2.5 to drain tokens on thinking with empty content
@@ -409,16 +400,16 @@ async def seed_from_search(query: str, max_urls: int = 5,
     if not search_results:
         return {"error": "No search results", "query": query}
 
-    # Step 2: Extract text from all URLs
-    all_texts = []
-    for result in search_results[:max_urls]:
-        text = await extract_text(result["url"])
+    # Step 2: Extract text from all URLs in parallel
+    async def _fetch_url(r):
+        text = await extract_text(r["url"])
         if text:
-            all_texts.append({
-                "url": result["url"],
-                "title": result.get("title", ""),
-                "text": text,
-            })
+            return {"url": r["url"], "title": r.get("title", ""), "text": text}
+        return None
+
+    fetch_tasks = [_fetch_url(r) for r in search_results[:max_urls]]
+    results = await asyncio.gather(*fetch_tasks)
+    all_texts = [r for r in results if r]
 
     if not all_texts:
         return {"error": "Could not extract text from any URL", "query": query}
@@ -457,8 +448,10 @@ async def seed_from_search(query: str, max_urls: int = 5,
     if not all_pass1_nodes:
         return {"error": "Mother model failed to extract nodes from any URL", "query": query}
 
-    # Embed and store pass 1 nodes
+    # Embed and store pass 1 nodes (batch embed)
     pass1_db_ids = []  # (db_id, content, level) for each node
+    # Collect all nodes first, then batch embed
+    flat_nodes = []
     for url_nodes in all_pass1_nodes:
         for node_data in url_nodes:
             if "content" not in node_data:
@@ -466,15 +459,26 @@ async def seed_from_search(query: str, max_urls: int = 5,
             content = node_data["content"]
             level = int(str(node_data.get("resolution_level", 4)).lstrip("Ll"))
             level = max(3, min(5, level))  # Clamp to L3-L5
+            flat_nodes.append({"content": content, "level": level})
 
-            emb = await embed(content)
-            node_id = db.insert_node(
-                conn, content, resolution_level=level,
-                confidence=0.6, source_url=None,
-            )
-            upsert_node(node_id, content, emb, level, None, 0.6)
-            created_nodes.append({"id": node_id, "level": level, "content": content[:100], "pass": 1})
-            pass1_db_ids.append(node_id)
+    if flat_nodes:
+        all_contents = [n["content"] for n in flat_nodes]
+        all_embeddings = await embed_batch_parallel(all_contents)
+
+        async with _write_lock:
+            for i, node_data in enumerate(flat_nodes):
+                content = node_data["content"]
+                level = node_data["level"]
+                emb = all_embeddings[i] if i < len(all_embeddings) else None
+
+                node_id = db.insert_node(
+                    conn, content, resolution_level=level,
+                    confidence=0.6, source_url=None,
+                )
+                if emb:
+                    upsert_node(node_id, content, emb, level, None, 0.6)
+                created_nodes.append({"id": node_id, "level": level, "content": content[:100], "pass": 1})
+                pass1_db_ids.append(node_id)
 
     # === PASS 2: Scaffold L0-L2 + cross-document edges ===
     # Compress all L3 nodes into a summary for the mother

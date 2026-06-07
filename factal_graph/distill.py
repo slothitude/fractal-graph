@@ -165,10 +165,15 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
         nodes = _parse_json_array(facts_raw)
         for node in nodes:
             if "content" in node:
+                c = node["content"]
+                if isinstance(c, list):
+                    c = c[0] if c else ""
+                if not isinstance(c, str) or not c.strip():
+                    continue
                 level = int(str(node.get("resolution_level", 4)).lstrip("Ll"))
                 level = max(3, min(5, level))
                 collected.append({
-                    "content": node["content"],
+                    "content": c,
                     "resolution_level": level,
                     "edge_to": node.get("edge_to"),
                     "edge_type": node.get("edge_type"),
@@ -240,6 +245,11 @@ async def distill_domain(domain: str, mother_model: str = None) -> dict:
 
         for i, node_data in enumerate(collected_sorted):
             content = node_data["content"]
+            # Ensure content is a string (mother sometimes returns lists)
+            if isinstance(content, list):
+                content = content[0] if content else ""
+            if not isinstance(content, str) or not content.strip():
+                continue
             level = node_data["resolution_level"]
             emb = embeddings[i] if i < len(embeddings) else None
             if not emb:

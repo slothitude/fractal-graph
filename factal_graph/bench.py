@@ -28,26 +28,13 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 
 async def _warmup(model: str, url: str) -> float:
-    """Trigger model load and wait briefly.
+    """Trigger model load. Uses shared cache to skip if already loaded.
 
     Returns:
         Load time in seconds.
     """
-    import httpx as _httpx
-    import time as _time
-    t0 = _time.time()
-    try:
-        async with _httpx.AsyncClient(timeout=60.0) as client:
-            await client.post(
-                f"{url}/api/generate",
-                json={"model": model, "prompt": ".", "stream": False,
-                      "options": {"num_predict": 1}, "think": False},
-            )
-    except Exception:
-        pass
-    elapsed = round(_time.time() - t0, 1)
-    print(f"         warmup {model}: {elapsed}s")
-    return elapsed
+    from model_cache import ensure_model_loaded
+    return await ensure_model_loaded(model, url)
 
 TEST_QUESTIONS = [
     # Existing graph topics (should score high)
