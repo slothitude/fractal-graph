@@ -63,32 +63,41 @@ async def _mother_generate_nvidia(prompt: str, model: str) -> str:
 
     Thinking OFF to avoid reasoning_budget eating into content budget.
     max_tokens=4096 — individual expansion calls don't need more.
+    Retries on 504 Gateway Timeout (NVIDIA server overloaded).
     """
     url = settings.nvidia_base_url.rstrip("/")
     api_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY", "")
     timeout = 600.0
+    import time as _time
 
-    for attempt in range(2):
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "temperature": 0.3,
-                    "max_tokens": 4096,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            if content:
-                return content
-            if attempt == 0:
-                logger.warning("NVIDIA model returned empty response, retrying...")
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "temperature": 0.3,
+                        "max_tokens": 4096,
+                        "chat_template_kwargs": {"enable_thinking": False},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                if content:
+                    return content
+                logger.warning("NVIDIA model returned empty response (attempt %d/3)", attempt + 1)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (502, 504) and attempt < 2:
+                wait = 10 * (attempt + 1)
+                logger.warning("NVIDIA %s, retrying in %ds (attempt %d/3)", e, wait, attempt + 1)
+                await asyncio.sleep(wait)
+                continue
+            raise
 
     return ""
 
