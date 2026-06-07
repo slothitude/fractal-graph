@@ -299,6 +299,8 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
 
     # Step 1: Try local mother up to N times
     url = settings.mother_url
+    from model_cache import ensure_model_loaded
+    await ensure_model_loaded(model, url)
 
     max_attempts = settings.grandmother_max_retries_before_escalate
     for attempt in range(max_attempts):
@@ -561,15 +563,14 @@ async def seed_topic_batch(topic: str, depth: int = 3, mother_model: str = None,
     raw = await _mother_generate_cloud(prompt, model)
 
     if not raw:
-        logger.error("Batch seed: cloud model returned empty for topic '%s'", topic)
-        return {"error": "Cloud model returned empty response", "topic": topic}
+        logger.warning("Batch seed: cloud model returned empty for topic '%s', falling back to recursive mode", topic)
+        return await seed_topic(topic, depth, mother_model=None, confidence=confidence)
 
     # Parse nested tree
     tree = _parse_json_object(raw)
     if not tree or "domain" not in tree:
-        logger.error("Batch seed: failed to parse tree JSON for topic '%s': %s",
-                     topic, raw[:200] if raw else "empty")
-        return {"error": "Failed to parse nested tree JSON", "topic": topic, "raw": raw[:500] if raw else ""}
+        logger.warning("Batch seed: failed to parse tree JSON for topic '%s', falling back to recursive mode", topic)
+        return await seed_topic(topic, depth, mother_model=None, confidence=confidence)
 
     # Flatten to flat node/edge lists
     flat_nodes, flat_edges = _flatten_nested_tree(tree, LEVEL_MEANINGS, depth, confidence)
