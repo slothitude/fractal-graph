@@ -180,8 +180,13 @@ async def seed_agent_topic(topic: str, depth: int = 4, mother_model: str = None)
         depth: Maximum resolution depth (default 4)
         mother_model: Override mother model (default: lfm2.5:gpu3)
     """
-    result = await seed_agent_topic_fn(topic, depth=depth, mother_model=mother_model)
-    return json.dumps(result, indent=2, default=str)
+    try:
+        result = await seed_agent_topic_fn(topic, depth=depth, mother_model=mother_model)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
 
 
 @mcp.tool()
