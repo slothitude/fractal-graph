@@ -511,16 +511,27 @@ async def _expand_level(conn, topic: str, parent_id: int, parent_content: str,
                 except (ValueError, Exception):
                     pass
 
-    # Recurse into children
+    # Recurse into children — batch 2 at a time for OLLAMA_NUM_PARALLEL=2
+    children_info = []
     for node_id in new_node_ids:
-        await _expand_level(
-            conn, topic, node_id,
-            [n["content"] for n in created_nodes if n["id"] == node_id][0] if any(n["id"] == node_id for n in created_nodes) else "",
-            next_level, max_depth, mother_model, confidence,
-            created_nodes, created_edges,
-            level_meanings=level_meanings,
-            seed_prompt=seed_prompt,
-        )
+        content = ([n["content"] for n in created_nodes if n["id"] == node_id]
+                  or [""])[0]
+        children_info.append((node_id, content))
+
+    batch_size = 2
+    for i in range(0, len(children_info), batch_size):
+        batch = children_info[i:i + batch_size]
+        tasks = [
+            _expand_level(
+                conn, topic, nid, ncontent,
+                next_level, max_depth, mother_model, confidence,
+                created_nodes, created_edges,
+                level_meanings=level_meanings,
+                seed_prompt=seed_prompt,
+            )
+            for nid, ncontent in batch
+        ]
+        await asyncio.gather(*tasks)
 
 
 def _compute_bboxes_for_subtree(conn, root_id: int):
