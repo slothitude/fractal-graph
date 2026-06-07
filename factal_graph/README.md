@@ -24,7 +24,7 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
           +-----------------------------------+
           |  Mother Model Ladder               |
           |  L1: lfm2.5:gpu3 (~8B, local)      |
-          |  L2: nvidia/nemotron-550B (cloud)  |
+          |  L2: z.ai GLM-5.1 (cloud)       |
           |  Generates L0->L{depth} hierarchy    |
           |  Computes bboxes + cross-res edges   |
           +-----------------+-----------------+
@@ -288,8 +288,6 @@ All settings via environment variables with `FRACTAL_` prefix:
 | `FRACTAL_MOTHER_MODEL` | `lfm2.5:gpu3` | Mother model (seeding) |
 | `FRACTAL_SEARCH_TRIGGER_ENABLED` | `true` | Enable search trigger layer |
 | `FRACTAL_SEARCH_MAX_URLS` | `3` | Max URLs per search trigger call |
-| `FRACTAL_NVIDIA_API_KEY` | (none) | NVIDIA Integrate API key for grandmother model |
-| `FRACTAL_NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | NVIDIA API base URL |
 
 ## Edge Types
 
@@ -311,7 +309,7 @@ All settings via environment variables with `FRACTAL_` prefix:
 pip install -r requirements.txt
 
 # Ollama needs: nomic-embed-text, qwen3.5:2b, lfm2.5:gpu3 (num_ctx 12288)
-# NVIDIA API (optional): nvidia/nemotron-3-ultra-550b-a55b for depth=3+ seeding
+# z.ai GLM-5.1: grandmother model for cloud escalation
 # searchMCP needs: running at C:/Users/aaron/searchmcp/ (for core.py import)
 
 python factal_server.py  # FastMCP stdio (MCP server)

@@ -31,7 +31,14 @@ from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
 
 
 def _is_cloud_model(model: str) -> bool:
-    return model and (model.startswith("nvidia/") or model.startswith("zai/"))
+    if not model:
+        return False
+    if model.startswith("zai/"):
+        return True
+    # Bare cloud model names (e.g. "glm-5.1" matches zai_model)
+    if model.lower() == settings.zai_model.lower():
+        return True
+    return False
 
 
 async def _ollama_call(prompt: str, model: str, url: str,
@@ -56,52 +63,6 @@ async def _ollama_call(prompt: str, model: str, url: str,
         if "message" in data:
             return data["message"].get("content", "").strip()
         return data.get("content", "").strip()
-
-
-async def _mother_generate_nvidia(prompt: str, model: str) -> str:
-    """Call NVIDIA Integrate API (OpenAI-compatible) for nvidia/ models.
-
-    Thinking OFF to avoid reasoning_budget eating into content budget.
-    max_tokens=4096 — individual expansion calls don't need more.
-    Retries on 504 Gateway Timeout (NVIDIA server overloaded).
-    """
-    url = settings.nvidia_base_url.rstrip("/")
-    api_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY", "")
-    timeout = 600.0
-    # Strip "nvidia/" prefix — that's our internal routing, not the API model name
-    api_model = model.removeprefix("nvidia/")
-    import time as _time
-
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    f"{url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": api_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                        "temperature": 0.3,
-                        "max_tokens": 4096,
-                        "chat_template_kwargs": {"enable_thinking": False},
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                if content:
-                    return content
-                logger.warning("NVIDIA model returned empty response (attempt %d/3)", attempt + 1)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (502, 504) and attempt < 2:
-                wait = 10 * (attempt + 1)
-                logger.warning("NVIDIA %s, retrying in %ds (attempt %d/3)", e, wait, attempt + 1)
-                await asyncio.sleep(wait)
-                continue
-            raise
-
-    return ""
 
 
 async def _mother_generate_zai(prompt: str, model: str) -> str:
@@ -169,18 +130,19 @@ async def _mother_generate_zai(prompt: str, model: str) -> str:
 
 
 async def _mother_generate_cloud(prompt: str, model: str) -> str:
-    """Route to the correct cloud API based on model prefix."""
-    if model.startswith("nvidia/"):
-        return await _mother_generate_nvidia(prompt, model)
-    elif model.startswith("zai/"):
+    """Route to z.ai GLM5.1 API based on model prefix or bare name."""
+    if model.startswith("zai/"):
         return await _mother_generate_zai(prompt, model)
+    # Bare cloud model name — default to z.ai routing
+    if model.lower() == settings.zai_model.lower():
+        return await _mother_generate_zai(prompt, f"zai/{model}")
     return ""
 
 
 async def _mother_generate(prompt: str, model: str = None) -> str:
     """Call the mother model with ladder escalation to grandmother on failure.
 
-    1. If model is nvidia/ or zai/ → go directly to cloud API (no ladder)
+    1. If model is zai/ or bare cloud name → go directly to z.ai API (no ladder)
     2. Try local mother up to N times (configurable via grandmother_max_retries_before_escalate)
     3. If all attempts return empty AND grandmother_enabled → escalate to cloud grandmother
     4. Escalation trigger: empty response only (not JSON parse failures —

@@ -159,15 +159,22 @@
 
 ## Outstanding (future, lower priority)
 
+### Phase 18: Remove NVIDIA, z.ai GLM-5.1 only cloud provider
+- [x] Remove nvidia_api_key, nvidia_base_url from config.py
+- [x] Delete `_mother_generate_nvidia()` from seed.py
+- [x] Remove nvidia/ prefix from `_is_cloud_model()` and `_mother_generate_cloud()`
+- [x] Update README: architecture diagram, config table, setup comment
+- [x] z.ai GLM-5.1 is now the sole cloud provider
+
 ### Phase 17: z.ai GLM5.1 Grandmother
 - [x] Add z.ai API config (base_url, api_key, model)
 - [x] Add `_mother_generate_zai()` — OpenAI-compatible API call with reasoning_content fallback
 - [x] Generalize cloud model routing (`_is_cloud_model` + `_mother_generate_cloud`)
 - [x] Fix prefix stripping: `zai/` → bare model name for API, same for `nvidia/`
 - [x] Update grandmother ladder to use generalized dispatcher
-- [x] Test: `_mother_generate("...", model="zai/glm-5.1")` — works, JSON parsed correctly
+- [x] Test: `_mother_generate("...", model="glm-5.1")` — works, JSON parsed correctly
 - [x] WARNING: z.ai ToS restricts usage to supported coding tools only — grandmother use may trigger restrictions
-- [x] Switch grandmother default to zai/glm-5.1 (grandmother_enabled=True)
+- [x] Switch grandmother default to glm-5.1 (grandmother_enabled=True)
 
 - [x] Web UI for graph visualization (Flask + D3.js, port 8018)
 - [x] Export/import graph to JSON format (db.py + MCP tools + Web UI endpoints + download button)
