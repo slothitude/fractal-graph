@@ -6,6 +6,7 @@ Modes:
   3. Mother standalone (~8B, no graph, just the question)
   4. 2B + graph + auto_expand (full expansion pipeline)
   5. 2B + graph + judge triad (two-pass Angel/Devil/Neutral)
+  6. 2B + graph + triad + parallel (ask + triad pass 1 batched)
 
 No LLM-as-judge — the pipeline provides its own metrics:
   confidence, key_facts, gaps, context_tokens, timing, expanded, nodes_added.
@@ -197,6 +198,32 @@ async def _call_2b_graph_triad(question: str) -> dict:
     }
 
 
+async def _call_2b_graph_triad_parallel(question: str) -> dict:
+    """Mode 6: 2B + graph + triad parallel (ask + triad pass 1 batched)."""
+    from reasoning import answer_with_triad
+
+    t0 = time.time()
+    result = await answer_with_triad(question)
+    total_time = round(time.time() - t0, 2)
+
+    triad = result.get("triad", {})
+    return {
+        "answer": result["answer"],
+        "confidence": result["confidence"],
+        "key_facts": result["key_facts"],
+        "gaps": result["gaps"],
+        "context_tokens": result.get("context_tokens", 0),
+        "expanded": result.get("expanded", False),
+        "nodes_added": result.get("nodes_added", 0),
+        "search_fallback": result.get("search_fallback", False),
+        "time_s": total_time,
+        "triad_time_s": result.get("timing", {}).get("total_with_triad_s", total_time),
+        "verdicts": triad.get("verdicts", {}),
+        "conflicts": triad.get("conflicts", []),
+        "edges_created": triad.get("edges_created", []),
+    }
+
+
 def _fmt_mode(data: dict) -> str:
     """Format one mode result as a single-line summary."""
     conf = data.get("confidence", 0.0)
@@ -247,7 +274,7 @@ async def run_bench():
         }
 
         # Mode 1: 2B + graph
-        print("  [1/5] 2B + graph...")
+        print("  [1/6] 2B + graph...")
         try:
             entry["graph_2b"] = await _call_2b_graph(q, auto_expand=False)
             print(f"       {_fmt_mode(entry['graph_2b'])}")
@@ -256,7 +283,7 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 2: 2B standalone
-        print("  [2/5] 2B standalone...")
+        print("  [2/6] 2B standalone...")
         try:
             entry["standalone_2b"] = await _call_2b_standalone(q)
             print(f"       {_fmt_mode(entry['standalone_2b'])}")
@@ -265,7 +292,7 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 3: Mother standalone
-        print("  [3/5] Mother standalone...")
+        print("  [3/6] Mother standalone...")
         try:
             entry["standalone_mother"] = await _call_mother_standalone(q)
             print(f"       {_fmt_mode(entry['standalone_mother'])}")
@@ -274,7 +301,7 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 4: 2B + graph + auto_expand
-        print("  [4/5] 2B + graph + auto_expand...")
+        print("  [4/6] 2B + graph + auto_expand...")
         try:
             entry["graph_2b_expand"] = await _call_2b_graph(q, auto_expand=True)
             print(f"       {_fmt_mode(entry['graph_2b_expand'])}")
@@ -283,12 +310,21 @@ async def run_bench():
             print(f"       ERROR: {e}")
 
         # Mode 5: 2B + graph + triad
-        print("  [5/5] 2B + graph + triad...")
+        print("  [5/6] 2B + graph + triad...")
         try:
             entry["graph_2b_triad"] = await _call_2b_graph_triad(q)
             print(f"       {_fmt_mode(entry['graph_2b_triad'])}")
         except Exception as e:
             entry["graph_2b_triad"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
+            print(f"       ERROR: {e}")
+
+        # Mode 6: 2B + graph + triad parallel
+        print("  [6/6] 2B + graph + triad parallel...")
+        try:
+            entry["graph_2b_triad_parallel"] = await _call_2b_graph_triad_parallel(q)
+            print(f"       {_fmt_mode(entry['graph_2b_triad_parallel'])}")
+        except Exception as e:
+            entry["graph_2b_triad_parallel"] = {"answer": f"ERROR: {e}", "time_s": 0, "key_facts": [], "gaps": [], "confidence": 0.0, "context_tokens": 0, "expanded": False, "nodes_added": 0, "search_fallback": False}
             print(f"       ERROR: {e}")
 
         results.append(entry)
@@ -311,6 +347,7 @@ async def run_bench():
             ("standalone_mother", "Mom"),
             ("graph_2b_expand", "2B+Ex"),
             ("graph_2b_triad", "2B+Tr"),
+            ("graph_2b_triad_parallel", "2B+TP"),
         ]:
             d = r.get(mode_key, {})
             t = d.get("time_s", 0)
@@ -339,6 +376,7 @@ async def run_bench():
         ("standalone_mother", "Mother alone"),
         ("graph_2b_expand", "2B+Graph+Expand"),
         ("graph_2b_triad", "2B+Graph+Triad"),
+        ("graph_2b_triad_parallel", "2B+Grp+Triad+Par"),
     ]
 
     for mode_key, label in MODES:
@@ -356,7 +394,7 @@ async def run_bench():
         avg_ctx = sum(e.get("context_tokens", 0) for e in entries) / n
 
         extra = ""
-        if mode_key == "graph_2b_triad":
+        if mode_key in ("graph_2b_triad", "graph_2b_triad_parallel"):
             avg_triad = sum(e.get("triad_time_s", 0) for e in entries) / n
             total_conflicts = sum(len(e.get("conflicts", [])) for e in entries)
             extra = f"  avg_triad_pass1={avg_triad:.1f}s  conflicts={total_conflicts}"

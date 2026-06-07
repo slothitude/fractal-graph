@@ -9,7 +9,7 @@ from query import query as query_fn, drill_down as drill_down_fn, search_nodes a
 from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn
 from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
-from reasoning import answer as answer_fn
+from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn
 from growth import curiosity_scan as curiosity_scan_fn
 from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
@@ -476,6 +476,23 @@ async def ask(question: str, auto_expand: bool = True) -> str:
         auto_expand: If True, fill gaps on low confidence and re-answer (default True)
     """
     result = await answer_fn(question, auto_expand=auto_expand)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def ask_with_triad(question: str) -> str:
+    """Ask with triad judgment in parallel — 2B ask + triad pass 1 batched.
+
+    Runs the 2B answer pipeline and judge triad pass 1 concurrently
+    (requires OLLAMA_NUM_PARALLEL=2 on Lappy). Then runs triad pass 2
+    to synthesize verdicts. Uses whichever answer has higher confidence.
+
+    Faster than calling ask then judge_topic separately (~3s savings).
+
+    Args:
+        question: Your question (e.g. "Why did Russia oppose NATO expansion?")
+    """
+    result = await answer_with_triad_fn(question)
     return json.dumps(result, indent=2, default=str)
 
 

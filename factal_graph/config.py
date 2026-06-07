@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     server_port: int = 8018
 
     # Token budgets for 2B reasoning pipeline
-    max_context_tokens: int = 2048
-    max_answer_tokens: int = 768
+    max_context_tokens: int = 6144
+    max_answer_tokens: int = 1024
 
     # Autonomous expansion
     auto_expand_threshold: float = 0.4  # confidence below this triggers expansion

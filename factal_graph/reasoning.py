@@ -46,6 +46,7 @@ async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,
                     "keep_alive": "30s",
                     "options": {
                         "temperature": 0.2,
+                        "num_ctx": 8192,
                     },
                     "think": False,
                 },
@@ -260,3 +261,38 @@ async def answer(question: str, auto_expand: bool = True,
                 )
 
     return response
+
+
+async def answer_with_triad(question: str) -> dict:
+    """Run ask + triad pass 1 in parallel, then triad pass 2.
+
+    With OLLAMA_NUM_PARALLEL=2, the 2B model can batch two inference
+    requests into one forward pass — saving ~3s vs sequential.
+
+    Returns:
+        {question, answer, confidence, key_facts, gaps,
+         context_tokens, timing, triad, expanded, nodes_added}
+    """
+    import time
+    from judges import judge_topic, judge_answer
+
+    t0 = time.time()
+
+    # Both use the 2B model — OLLAMA_NUM_PARALLEL=2 batches them
+    answer_task = answer(question, auto_expand=True)
+    triad_task = judge_topic(question)
+
+    result, triad = await asyncio.gather(answer_task, triad_task)
+
+    # Pass 2: synthesize from triad verdicts
+    triad_answer = await judge_answer(question, triad)
+
+    # Use triad answer if higher confidence
+    if triad_answer.get("confidence", 0) > result.get("confidence", 0):
+        result["answer"] = triad_answer["answer"]
+        result["confidence"] = triad_answer["confidence"]
+        result["key_facts"] = triad_answer.get("key_facts", result["key_facts"])
+
+    result["timing"]["total_with_triad_s"] = round(time.time() - t0, 2)
+    result["triad"] = triad
+    return result
