@@ -42,12 +42,13 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
    | classify,  | | mother   | | cross-  | | triad,    |
    | ask, judge | | extract  | | link    | | consistency|
    +-----------+ +----------+ +---------+ +-----------+
-   +-----------+ +-----------+
-   | Web UI    | | Export/   |
-   | D3.js     | | Import    |
-   +-----------+ +-----------+
+   +-----------+ +-----------+ +-----------+
+   | Web UI    | | Export/   | | Search    |
+   | D3.js     | | Import    | | Trigger   |
+   +-----------+ +-----------+ +-----------+
 
-              RUNTIME — 2B for queries, mother only for seeding/expansion
+   RUNTIME — 2B for queries, mother only for seeding/expansion
+   SEARCH TRIGGER — fills L4-L5 evidence from web sources at all expansion points
 ```
 
 ### The Key Insight
@@ -78,12 +79,13 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 | `bench.py`        | Benchmark -- 5 modes x 8 questions |
 | `web_ui.py`       | Flask Web UI -- graph visualization, search, export/import endpoints |
 | `templates/index.html` | D3.js force-directed graph, side panel, search, export/import buttons |
-| `factal_server.py`| MCP server -- 30 tools via FastMCP stdio |
+| `factal_server.py`| MCP server -- 31 tools via FastMCP stdio |
+| `search_trigger.py`| Search trigger layer -- rate-limited, deduped web-grounded evidence |
 
 ### External Dependencies
 - **searchMCP** (`C:/Users/aaron/searchmcp/core.py`) -- search + text extraction via SearXNG fan-out and trafilatura/BeautifulSoup.
 
-## MCP Tools (30 total)
+## MCP Tools (31 total)
 
 ### Ask -- 2B Reasoning
 - `ask(question, auto_expand)` -- Primary tool. embed -> classify (2B) -> gather context -> synthesize (2B). Optional auto-expand on low confidence.
@@ -98,6 +100,9 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 - `seed_topic(topic, depth, mother_model)` -- L0-L{depth} hierarchy from scratch
 - `seed_from_search(query, max_urls, mother_model)` -- Web search + mother structuring
 - `seed_expand(node_id, mother_model)` -- Expand sparse node, fill missing levels
+
+### Search Trigger -- Web-Grounded Evidence
+- `search_and_ingest(query, parent_node_id, max_urls)` -- Search web, mother structures L4-L5 evidence nodes. Rate-limited 10/min.
 
 ### Distillation -- Mother Model Knowledge Extraction
 - `distill_topic(topic, mother_model)` -- Extract entities/facts/evidence from mother's parametric knowledge
@@ -163,6 +168,33 @@ Features:
 | `/api/export` | GET | Download full graph as JSON |
 | `/api/import` | POST | Upload JSON to import (multipart file) |
 
+## Search Trigger Layer
+
+All graph expansion paths automatically search the web for L4-L5 evidence nodes
+when the graph is sparse or confidence is low. This grounds mother-model hallucinations
+(~40% on L4-L5) with real, sourced information.
+
+### Trigger Types & Rate Limits
+
+| Type | Max Calls | Window | When |
+|------|-----------|--------|------|
+| `gap` | 3 | 60s | Low confidence answer, gap detected |
+| `post_seed` | 5 | 120s | After seed_topic completes for L3 nodes |
+| `sparse_evidence` | 2 | 300s | Curiosity scan finds L3+ leaf nodes |
+| `post_distill` | 5 | 120s | After distillation for low-conf L4 nodes |
+| `manual` | 10 | 60s | MCP tool `search_and_ingest` calls |
+
+### Wiring Points
+
+1. **reasoning.py** -- gap strings → search before mother fill (saves ~30s warmup)
+2. **seed.py** -- L3 nodes after `_compute_bboxes_for_subtree()`
+3. **growth.py** -- L3+ sparse nodes in `curiosity_scan()` (L0-L2 still use mother)
+4. **distill.py** -- L4 nodes with confidence < 0.7 after STORE phase
+
+### Dedup
+
+Same query (case-insensitive MD5 hash) is never searched twice in a session.
+
 ## Export/Import Format
 
 ```json
@@ -204,7 +236,7 @@ User Question
     |
     v
 [5] AUTO-EXPAND (if confidence < threshold)
-    |  gap fill -> if mother fails -> web search fallback
+    |  search trigger (gap) -> if no nodes -> mother gap fill -> if fails -> web search fallback
     |
     v
 [6] RE-SYNTHESIZE with enriched context
@@ -237,6 +269,8 @@ All settings via environment variables with `FRACTAL_` prefix:
 | `FRACTAL_LLM_MODEL` | `qwen3.5:2b` | Runtime classifier |
 | `FRACTAL_MOTHER_URL` | `http://100.84.161.63:11434` | Mother model endpoint |
 | `FRACTAL_MOTHER_MODEL` | `lfm2.5:gpu3` | Mother model (seeding) |
+| `FRACTAL_SEARCH_TRIGGER_ENABLED` | `true` | Enable search trigger layer |
+| `FRACTAL_SEARCH_MAX_URLS` | `3` | Max URLs per search trigger call |
 
 ## Edge Types
 
@@ -287,4 +321,7 @@ export_graph()
 
 # 7. Import (restores + re-indexes embeddings)
 import_graph(json_string, merge=True)
+
+# 8. Manual search trigger — ground a topic with real sources
+search_and_ingest("NATO Article 5 invocation history")
 ```
