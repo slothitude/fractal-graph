@@ -760,17 +760,39 @@ def score_results(predictions_path: str) -> dict:
         if is_exact:
             exact_matches += 1
 
-        # File-level: extract files from both patches
-        gt_files = set(re.findall(r'diff --git a/(.*?) b/', gt_patch))
-        pred_files = set(re.findall(r'diff --git a/(.*?) b/', model_patch))
+        # File-level: extract files from both patches, normalize to forward slashes
+        gt_files = {f.replace("\\", "/") for f in re.findall(r'diff --git a/(.*?) b/', gt_patch)}
+        pred_files = {f.replace("\\", "/") for f in re.findall(r'diff --git a/(.*?) b/', model_patch)}
+        # Also match repo-relative paths (e.g., astropy/coordinates/angles.py)
+        pred_files |= {f.replace("\\", "/") for f in re.findall(r'diff --git a/\S+/(.*?) b/', model_patch)}
         if gt_files:
             file_total += 1
             if pred_files & gt_files:  # any overlap
                 file_hits += 1
 
-        # Function-level: extract new function definitions from + lines
-        gt_funcs = set(re.findall(r'^\+.*(?:def |class )(\w+)', gt_patch, re.MULTILINE))
-        pred_funcs = set(re.findall(r'^\+.*(?:def |class )(\w+)', model_patch, re.MULTILINE))
+        # Function-level: extract from hunk @@ headers + def/class lines
+        # Hunk headers contain the context function, e.g. @@ -314,10 +314,21 @@ def to_string(
+        def _extract_hunk_targets(patch_text):
+            """Extract function/class names from hunk @@ headers and +def lines."""
+            targets = set()
+            # From hunk headers: @@ ... @@ <optional> function_name(
+            # Handles both real headers (@@ -314,10 +314,21 @@ def to_string()
+            # and placeholders (@@ -X,Y +X,Z @@ def to_string())
+            for m in re.finditer(
+                r'@@[-0-9XYZ,+ ]+@@\s*(?:\w+\s+)?(?:def |class )(\w+)',
+                patch_text,
+            ):
+                targets.add(m.group(1))
+            # From + lines that add new function/class definitions
+            for line in patch_text.split('\n'):
+                if line.startswith('+') and not line.startswith('+++'):
+                    m = re.search(r'(?:def |class )(\w+)', line)
+                    if m:
+                        targets.add(m.group(1))
+            return targets
+
+        gt_funcs = _extract_hunk_targets(gt_patch)
+        pred_funcs = _extract_hunk_targets(model_patch)
         if gt_funcs:
             func_total += 1
             if pred_funcs & gt_funcs:
@@ -781,6 +803,8 @@ def score_results(predictions_path: str) -> dict:
             "exact_match": is_exact,
             "file_overlap": bool(pred_files & gt_files) if gt_files else None,
             "func_overlap": bool(pred_funcs & gt_funcs) if gt_funcs else None,
+            "gt_functions": sorted(gt_funcs),
+            "pred_functions": sorted(pred_funcs),
         })
 
     return {
