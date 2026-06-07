@@ -497,6 +497,158 @@ async def _run_bench_inner() -> list[dict]:
     return results
 
 
+# --- Agent Decision Benchmark -- compare models on procedural knowledge ---
+
+DECIDE_QUESTIONS = [
+    {"q": "A tool call returned an unexpected format", "expected": "retry with schema check"},
+    {"q": "I don't have enough information to complete the task", "expected": "ask for clarification"},
+    {"q": "The user request is vague and could mean multiple things", "expected": "ask for clarification"},
+    {"q": "A file operation failed with permission denied", "expected": "check permissions or escalate"},
+    {"q": "The test suite is passing but coverage is low", "expected": "prioritize high-risk areas"},
+]
+
+
+def _fmt_decide(data: dict) -> str:
+    """Format one decide result as a single-line summary."""
+    conf = data.get("confidence", 0.0)
+    t = data.get("time_s", 0)
+    patterns = len(data.get("relevant_patterns", []))
+    risks = len(data.get("risks", []))
+    action = data.get("action", "")[:40]
+    parts = [f"{t:>6.1f}s", f"conf={conf:.2f}", f"pats={patterns}", f"risks={risks}"]
+    parts.append(f"act={action}")
+    return "  ".join(parts)
+
+
+async def _call_decide(question: str) -> dict:
+    """Call decide() with current LLM model."""
+    from reasoning import decide
+    t0 = time.time()
+    result = await decide(question)
+    result["time_s"] = round(time.time() - t0, 2)
+    return result
+
+
+async def run_decide_bench():
+    """Bench decide() across 2B models: qwen3.5:2b and qwen3.5:0.8b.
+
+    Tests 5 agent-oriented procedural knowledge questions.
+    Compares confidence, action quality, relevant_patterns, risks, timing.
+    """
+    import os
+    original_model = settings.llm_model
+
+    models = ["qwen3.5:2b", "qwen3.5:0.8b"]
+    model_results = {}
+
+    total_t0 = time.time()
+
+    for model in models:
+        print(f"\n{'='*70}")
+        print(f"Model: {model}")
+        print(f"{'='*70}")
+
+        # Override LLM model for this run
+        settings.llm_model = model
+        # Clear model cache so new model loads
+        from model_cache import invalidate
+        invalidate()
+
+        model_results[model] = []
+
+        for test in DECIDE_QUESTIONS:
+            q = test["q"]
+            expected = test["expected"]
+            print(f"\n  Q: {q}")
+            print(f"  Expected: {expected}")
+            print(f"  {'-'*50}")
+
+            try:
+                result = await _call_decide(q)
+                print(f"  {_fmt_decide(result)}")
+
+                # Score: did the action match expected behavior?
+                action_lower = result.get("action", "").lower()
+                expected_lower = expected.lower()
+                action_words = set(action_lower.split())
+                expected_words = set(expected_lower.split())
+                overlap = action_words & expected_words
+                relevance = len(overlap) / max(len(expected_words), 1)
+
+                result["relevance"] = round(relevance, 2)
+                model_results[model].append(result)
+            except Exception as e:
+                print(f"  ERROR: {e}")
+                model_results[model].append({
+                    "question": q, "expected": expected,
+                    "action": f"ERROR: {e}", "confidence": 0.0,
+                    "time_s": 0, "relevant_patterns": [], "risks": [],
+                    "relevance": 0.0,
+                })
+
+        print(f"\n  [{model}] done")
+
+    # Restore original model
+    settings.llm_model = original_model
+    from model_cache import invalidate
+    invalidate()
+
+    total_time = round(time.time() - total_t0, 1)
+
+    # Comparison table
+    print(f"\n{'='*70}")
+    print("DECIDE BENCH — MODEL COMPARISON")
+    print(f"{'='*70}")
+    print(f"{'Q':<50} {'2B conf':>7} {'2B rel':>5} | {'0.8b conf':>9} {'0.8b rel':>6} | {'Winner':>8}")
+    print("-" * 100)
+
+    for i, test in enumerate(DECIDE_QUESTIONS):
+        q_label = test["q"][:48]
+        r2 = model_results.get("qwen3.5:2b", [{}])[i]
+        r08 = model_results.get("qwen3.5:0.8b", [{}])[i]
+        c2 = r2.get("confidence", 0.0)
+        c08 = r08.get("confidence", 0.0)
+        rel2 = r2.get("relevance", 0.0)
+        rel08 = r08.get("relevance", 0.0)
+        c2s = f"{c2:.2f}" if c2 else "  -"
+        c08s = f"{c08:.2f}" if c08 else "  -"
+        r2s = f"{rel2:.2f}" if rel2 else "  -"
+        r08s = f"{rel08:.2f}" if rel08 else "  -"
+        winner = "2B" if c2 > c08 else ("0.8b" if c08 > c2 else "tie")
+        print(f"{q_label:<50} {c2s:>7} {r2s:>5} | {c08s:>9} {r08s:>6} | {winner:>8}")
+
+    # Aggregate averages
+    print(f"\n{'='*70}")
+    print("AGGREGATES")
+    print(f"{'='*70}")
+    for model in models:
+        entries = model_results.get(model, [])
+        n = len(entries)
+        if not n:
+            continue
+        avg_conf = sum(e.get("confidence", 0.0) for e in entries) / n
+        avg_rel = sum(e.get("relevance", 0.0) for e in entries) / n
+        avg_time = sum(e.get("time_s", 0) for e in entries) / n
+        avg_pats = sum(len(e.get("relevant_patterns", [])) for e in entries) / n
+        avg_risks = sum(len(e.get("risks", [])) for e in entries) / n
+        print(f"  {model:<20} n={n}  avg_conf={avg_conf:.2f}  avg_relevance={avg_rel:.2f}  "
+              f"avg_time={avg_time:.1f}s  avg_patterns={avg_pats:.1f}  avg_risks={avg_risks:.1f}")
+
+    print(f"\nTotal bench time: {total_time}s")
+
+    # Persist
+    run_timestamp = datetime.now(timezone.utc).isoformat()
+    run_data = {
+        "timestamp": run_timestamp,
+        "bench_type": "decide",
+        "total_time_s": total_time,
+        "results": model_results,
+    }
+    with open(RESULTS_DIR / "bench_decide_results.json", "w") as f:
+        json.dump(run_data, f, indent=2, default=str)
+    print(f"\nResults saved to {RESULTS_DIR / 'bench_decide_results.json'}")
+
+
 if __name__ == "__main__":
     import sys
     if "--distill" in sys.argv:
@@ -505,5 +657,7 @@ if __name__ == "__main__":
         if idx + 1 < len(sys.argv):
             domain = sys.argv[idx + 1]
         asyncio.run(run_distill_compare(distill_domain=domain))
+    elif "--decide" in sys.argv:
+        asyncio.run(run_decide_bench())
     else:
         asyncio.run(run_bench())
