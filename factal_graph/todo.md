@@ -167,6 +167,7 @@
 - [x] Update grandmother ladder to use generalized dispatcher
 - [x] Test: `_mother_generate("...", model="zai/glm-5.1")` — works, JSON parsed correctly
 - [x] WARNING: z.ai ToS restricts usage to supported coding tools only — grandmother use may trigger restrictions
+- [x] Switch grandmother default to zai/glm-5.1 (grandmother_enabled=True)
 
 - [x] Web UI for graph visualization (Flask + D3.js, port 8018)
 - [x] Export/import graph to JSON format (db.py + MCP tools + Web UI endpoints + download button)

@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     zai_model: str = "GLM-5.1"
 
     # Grandmother model — cloud escalation when mother fails
-    grandmother_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
-    grandmother_enabled: bool = False  # auto-escalation toggle (off by default)
+    grandmother_model: str = "zai/glm-5.1"
+    grandmother_enabled: bool = True  # auto-escalation toggle (on, z.ai default)
     grandmother_max_retries_before_escalate: int = 2  # retry mother N times first
 
     # Monte Carlo decision enhancement
