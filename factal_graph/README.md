@@ -82,13 +82,15 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 | `bench.py`        | Benchmark -- ask (5 modes), decide (2B vs 0.8b) |
 | `web_ui.py`       | Flask Web UI -- graph visualization, search, export/import endpoints |
 | `templates/index.html` | D3.js force-directed graph, side panel, search, export/import buttons |
-| `factal_server.py`| MCP server -- 35 tools via FastMCP stdio |
+| `meeseeks.py`     | Meeseeks system -- task-scoped ephemeral souls with lifecycle management |
+| `souls/`          | Soul templates -- YAML configs for named tagged subgraphs (coder, companion, researcher) |
+| `factal_server.py`| MCP server -- 46 tools via FastMCP stdio |
 | `search_trigger.py`| Search trigger layer -- rate-limited, deduped web-grounded evidence |
 
 ### External Dependencies
 - **searchMCP** (`C:/Users/aaron/searchmcp/core.py`) -- search + text extraction via SearXNG fan-out and trafilatura/BeautifulSoup.
 
-## MCP Tools (35 total)
+## MCP Tools (46 total)
 
 ### Ask -- 2B Reasoning
 - `ask(question, auto_expand)` -- Primary tool. embed -> classify (2B) -> gather context -> synthesize (2B). Optional auto-expand on low confidence.
@@ -140,6 +142,24 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 - `find_contradictions()` -- All CONTRADICTS/CHALLENGES/resolution_conflict edges
 - `propagate_confidence(node_id)` -- Bottom-up confidence propagation
 - `graph_stats()` -- Nodes/edges per level, ChromaDB coverage
+
+### Agent Decision Mode — Monte Carlo
+- `decide_mc(situation, options, simulations, soul)` -- Monte Carlo graph search decision. N simulations sampling random graph subsets, aggregate by majority vote.
+- `distill_behavior(situations, simulations)` -- Distill MC decision traces into procedural knowledge nodes.
+
+### Soul System — Named Tagged Subgraphs
+- `seed_soul(name, mother_model)` -- Seed a soul from YAML template into graph (coder, companion, researcher)
+- `list_souls()` -- List soul templates with seeded status and node counts
+- `distill_soul(soul_id, situations, simulations)` -- Growth loop: distill behavior scoped to soul's subgraph
+- `soul_decide(soul_id, situation, options)` -- Scoped MC decision using soul's personality params and graph
+
+### Meeseeks — Task-scoped Ephemeral Souls
+- `spawn_meeseeks(task, parent_soul)` -- Create a Meeseeks instance for a task (inherits parent soul graph)
+- `meeseeks_status(instance_id)` -- Get instance details with consistency history
+- `meeseeks_step(instance_id, options)` -- Execute one MC decision step (tracks consistency as existential state)
+- `meeseeks_run(task, parent_soul, max_steps)` -- Full lifecycle: spawn → step until done → release or decompose
+- `release_meeseeks(instance_id)` -- Write outcome to parent soul, delete ephemeral graph
+- `list_meeseeks()` -- List all active (not released/decomposed) instances
 
 ### Export / Import
 - `export_graph()` -- Export entire graph as portable JSON (no embeddings)
