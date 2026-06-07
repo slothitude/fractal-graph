@@ -644,18 +644,27 @@ async def distill_behavior(
     created_nodes = []
     behavior_domain_id = None
 
-    # Find or create "observed_agent_behavior" L0 domain
-    existing = conn.execute(
-        "SELECT id FROM nodes WHERE content LIKE '%observed_agent_behavior%' "
-        "AND resolution_level = 0"
-    ).fetchone()
-    if existing:
-        behavior_domain_id = existing["id"]
-    else:
+    # Find existing "agent behavior" L0 domain via semantic search
+    # (more robust than LIKE — catches differently-worded but same-topic domains)
+    domain_probe = await embed(
+        "Observed agent decision behavior patterns distilled from Monte Carlo simulations"
+    )
+    l0_hits = query_level(domain_probe, 0, n_results=5)
+    for hit in l0_hits:
+        hit_id = int(hit["node_id"])
+        hit_node = db.get_node(conn, hit_id)
+        if hit_node:
+            hit_lower = hit_node["content"].lower()
+            if any(kw in hit_lower for kw in
+                   ["agent behavior", "agent decision", "procedural reasoning",
+                    "procedural decomposition", "autonomous agent"]):
+                behavior_domain_id = hit_id
+                break
+
+    if not behavior_domain_id:
         # Create L0 domain node
-        from embedder import embed
         domain_content = "Observed agent decision behavior patterns distilled from Monte Carlo simulations"
-        domain_emb = await embed(domain_content)
+        domain_emb = domain_probe  # already computed above
         behavior_domain_id = db.insert_node(
             conn, domain_content, resolution_level=0, confidence=0.8,
         )

@@ -158,6 +158,15 @@
 ---
 
 ## Outstanding (future, lower priority)
+
+### Phase 17: z.ai GLM5.1 Grandmother
+- [ ] Add z.ai API config (base_url, api_key, model)
+- [ ] Add `_mother_generate_zai()` — OpenAI-compatible API call
+- [ ] Generalize cloud model routing (`_is_cloud_model` + `_mother_generate_cloud`)
+- [ ] Update grandmother ladder to use generalized dispatcher
+- [ ] Test: `seed_topic("...", mother_model="zai/glm-5.1")`
+- [ ] Test: enable grandmother with `zai/glm-5.1` and verify escalation
+
 - [x] Web UI for graph visualization (Flask + D3.js, port 8018)
 - [x] Export/import graph to JSON format (db.py + MCP tools + Web UI endpoints + download button)
 - Persistent cron-based auto-distillation (distill new domains periodically)

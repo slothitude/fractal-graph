@@ -55,15 +55,18 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
 
 async def _is_duplicate(content: str, embedding: list[float],
                         parent_id: int | None, level: int) -> bool:
-    """Check if a node is too similar to existing siblings at the same level.
+    """Check if a node is too similar to existing nodes at the same level.
 
-    Uses level-aware dedup thresholds — L0-L2 are lenient, L4-L5 are strict.
+    Two checks:
+    1. If parent_id given — check siblings under same parent (local dedup)
+    2. Always — query ChromaDB at same level for global dedup (catches orphan
+       duplicates and near-identical L0 domains that have no parent)
     """
     threshold = DEDUP_THRESHOLD.get(level, 0.85)
     conn = db.get_db()
 
+    # Local dedup: siblings under same parent
     if parent_id:
-        # Check siblings under same parent
         children = db.get_children(conn, parent_id)
         for child in children:
             if child["resolution_level"] != level:
@@ -77,6 +80,27 @@ async def _is_duplicate(content: str, embedding: list[float],
                         return True
             except Exception:
                 continue
+
+    # Global dedup: query ChromaDB at same level for any near-match
+    # This catches L0 domains with no parent, and nodes whose parent differs
+    # but content is semantically identical.
+    try:
+        hits = query_level(embedding, level, n_results=3)
+        for hit in hits:
+            hit_id = int(hit["node_id"])
+            # Skip self (if already inserted) and siblings already checked
+            if parent_id:
+                children_ids = {c["id"] for c in db.get_children(conn, parent_id)
+                               if c["resolution_level"] == level}
+                if hit_id in children_ids:
+                    continue
+            dist = hit.get("distance", 1.0)
+            # ChromaDB distance → cosine: sim = 1 - distance
+            sim = 1.0 - dist
+            if sim >= threshold:
+                return True
+    except Exception:
+        pass
 
     return False
 
