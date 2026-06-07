@@ -26,12 +26,12 @@ from graph import propagate_confidence, recompute_parent_bbox, compute_bbox
 # --- Mother model LLM calls ---
 
 # ANTI-CASCADE: grandmother never calls _mother_generate.
-# If you need grandmother-first, call _mother_generate_nvidia directly.
+# If you need grandmother-first, call _mother_generate_cloud directly.
 # Do not route grandmother output back through the ladder.
 
 
-def _is_nvidia_model(model: str) -> bool:
-    return model and model.startswith("nvidia/")
+def _is_cloud_model(model: str) -> bool:
+    return model and (model.startswith("nvidia/") or model.startswith("zai/"))
 
 
 async def _ollama_call(prompt: str, model: str, url: str,
@@ -68,6 +68,8 @@ async def _mother_generate_nvidia(prompt: str, model: str) -> str:
     url = settings.nvidia_base_url.rstrip("/")
     api_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY", "")
     timeout = 600.0
+    # Strip "nvidia/" prefix — that's our internal routing, not the API model name
+    api_model = model.removeprefix("nvidia/")
     import time as _time
 
     for attempt in range(3):
@@ -77,7 +79,7 @@ async def _mother_generate_nvidia(prompt: str, model: str) -> str:
                     f"{url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={
-                        "model": model,
+                        "model": api_model,
                         "messages": [{"role": "user", "content": prompt}],
                         "stream": False,
                         "temperature": 0.3,
@@ -102,12 +104,85 @@ async def _mother_generate_nvidia(prompt: str, model: str) -> str:
     return ""
 
 
+async def _mother_generate_zai(prompt: str, model: str) -> str:
+    """Call z.ai GLM5.1 API (OpenAI-compatible) for zai/ models.
+
+    GLM5.1 uses reasoning tokens by default — content is empty until reasoning
+    finishes and the model starts generating the actual response.
+    Must use max_tokens=8192 to ensure room for both reasoning + content.
+    Falls back to reasoning_content if content is empty.
+    """
+    url = settings.zai_base_url.rstrip("/")
+    api_key = settings.zai_api_key or os.environ.get("ZAI_API_KEY", "")
+    timeout = 600.0
+    # Strip "zai/" prefix — that's our internal routing, not the API model name
+    api_model = model.removeprefix("zai/")
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": api_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "temperature": 0.3,
+                        "max_tokens": 8192,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                msg = data.get("choices", [{}])[0].get("message", {})
+                content = msg.get("content", "").strip()
+                if content:
+                    return content
+                # Fallback: extract from reasoning_content (model may put
+                # answer there if max_tokens ran out)
+                reasoning = msg.get("reasoning_content", "").strip()
+                if reasoning:
+                    # Try to extract JSON from reasoning
+                    import re as _re
+                    # Look for JSON blocks in reasoning
+                    json_match = _re.search(r'```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```', reasoning, _re.DOTALL)
+                    if json_match:
+                        return json_match.group(1).strip()
+                    # Last line or last few lines might be the answer
+                    lines = [l.strip() for l in reasoning.split('\n') if l.strip()]
+                    # Return last non-numbered line if it looks like content
+                    for line in reversed(lines[-5:]):
+                        if not _re.match(r'^\d+[\.\)]', line) and len(line) > 20:
+                            return line
+                    logger.warning("z.ai reasoning had no extractable content (attempt %d/3)", attempt + 1)
+                else:
+                    logger.warning("z.ai model returned empty response (attempt %d/3)", attempt + 1)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (502, 504) and attempt < 2:
+                wait = 10 * (attempt + 1)
+                logger.warning("z.ai %s, retrying in %ds (attempt %d/3)", e, wait, attempt + 1)
+                await asyncio.sleep(wait)
+                continue
+            raise
+
+    return ""
+
+
+async def _mother_generate_cloud(prompt: str, model: str) -> str:
+    """Route to the correct cloud API based on model prefix."""
+    if model.startswith("nvidia/"):
+        return await _mother_generate_nvidia(prompt, model)
+    elif model.startswith("zai/"):
+        return await _mother_generate_zai(prompt, model)
+    return ""
+
+
 async def _mother_generate(prompt: str, model: str = None) -> str:
     """Call the mother model with ladder escalation to grandmother on failure.
 
-    1. If model is nvidia/ → go directly to NVIDIA API (no ladder)
+    1. If model is nvidia/ or zai/ → go directly to cloud API (no ladder)
     2. Try local mother up to N times (configurable via grandmother_max_retries_before_escalate)
-    3. If all attempts return empty AND grandmother_enabled → escalate to NVIDIA grandmother
+    3. If all attempts return empty AND grandmother_enabled → escalate to cloud grandmother
     4. Escalation trigger: empty response only (not JSON parse failures —
        malformed JSON means the prompt is the bug, not the model size)
 
@@ -115,9 +190,9 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
     """
     model = model or settings.mother_model
 
-    # Explicit nvidia/ request → go directly (no ladder)
-    if _is_nvidia_model(model):
-        return await _mother_generate_nvidia(prompt, model)
+    # Explicit cloud model request → go directly (no ladder)
+    if _is_cloud_model(model):
+        return await _mother_generate_cloud(prompt, model)
 
     # Step 1: Try local mother up to N times
     url = settings.mother_url
@@ -135,7 +210,7 @@ async def _mother_generate(prompt: str, model: str = None) -> str:
     # Step 2: Escalate to grandmother
     if settings.grandmother_enabled:
         logger.info("Mother failed after %d attempts, escalating to grandmother", max_attempts)
-        content = await _mother_generate_nvidia(prompt, settings.grandmother_model)
+        content = await _mother_generate_cloud(prompt, settings.grandmother_model)
         if content:
             return content
         logger.warning("Grandmother also failed")
@@ -256,9 +331,9 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
     """
     model = model or settings.mother_model
 
-    # Explicit nvidia/ request → go directly (no ladder)
-    if _is_nvidia_model(model):
-        return await _mother_generate_nvidia(prompt, model)
+    # Explicit cloud model request → go directly (no ladder)
+    if _is_cloud_model(model):
+        return await _mother_generate_cloud(prompt, model)
 
     # Step 1: Try local mother up to N times
     url = settings.mother_url
@@ -277,7 +352,7 @@ async def _mother_generate_keepalive(prompt: str, keep_alive: str = "15s",
     # Step 2: Escalate to grandmother
     if settings.grandmother_enabled:
         logger.info("Mother keepalive failed after %d attempts, escalating to grandmother", max_attempts)
-        content = await _mother_generate_nvidia(prompt, settings.grandmother_model)
+        content = await _mother_generate_cloud(prompt, settings.grandmother_model)
         if content:
             return content
         logger.warning("Grandmother also failed")

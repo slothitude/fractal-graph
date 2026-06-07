@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     nvidia_api_key: str = "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"
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
 
+    # z.ai GLM5.1 API (cloud mother/grandmother model)
+    # WARNING: GLM Coding Plan is restricted to supported tools only (Claude Code, Cline, etc).
+    # Using via MCP server / direct API may trigger account restrictions per ToS.
+    zai_api_key: str = "b7143b5694e443eaa6858550fd2bcf2e.Jl2Q0bsQWWKrBdbd"
+    zai_base_url: str = "https://api.z.ai/api/coding/paas/v4"
+    zai_model: str = "GLM-5.1"
+
     # Grandmother model — cloud escalation when mother fails
     grandmother_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     grandmother_enabled: bool = False  # auto-escalation toggle (off by default)
