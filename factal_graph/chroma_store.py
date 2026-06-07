@@ -40,7 +40,8 @@ def get_collection(level: int) -> chromadb.Collection:
 
 def upsert_node(node_id: int, text: str, embedding: list[float],
                 resolution_level: int, parent_id: int = None,
-                confidence: float = 0.5, source_url: str = None):
+                confidence: float = 0.5, source_url: str = None,
+                soul_id: str = None):
     """Add or update a node embedding in ChromaDB."""
     col = get_collection(resolution_level)
     metadata = {
@@ -51,6 +52,8 @@ def upsert_node(node_id: int, text: str, embedding: list[float],
         metadata["parent_id"] = parent_id
     if source_url:
         metadata["source_url"] = source_url
+    if soul_id:
+        metadata["soul_id"] = soul_id
 
     col.upsert(
         ids=[str(node_id)],
@@ -66,17 +69,29 @@ def delete_node(node_id: int, resolution_level: int):
     col.delete(ids=[str(node_id)])
 
 
-def query_level(embedding: list[float], level: int, n_results: int = 10) -> list[dict]:
-    """Vector search within a single resolution level."""
+def query_level(embedding: list[float], level: int, n_results: int = 10,
+                soul_id: str = None) -> list[dict]:
+    """Vector search within a single resolution level.
+
+    Args:
+        embedding: Query vector
+        level: Resolution level to search
+        n_results: Max results
+        soul_id: Optional soul filter — only return nodes from this soul
+    """
+    where = {"soul_id": soul_id} if soul_id else None
     try:
         col = get_collection(level)
         count = col.count()
         if count == 0:
             return []
-        results = col.query(
+        kwargs = dict(
             query_embeddings=[embedding],
-            n_results=min(n_results, count)
+            n_results=min(n_results, count),
         )
+        if where:
+            kwargs["where"] = where
+        results = col.query(**kwargs)
     except Exception:
         # HNSW corruption — reset and retry with fresh client
         reset_collections()
@@ -89,7 +104,8 @@ def query_level(embedding: list[float], level: int, n_results: int = 10) -> list
                 return []
             results = col.query(
                 query_embeddings=[embedding],
-                n_results=min(n_results, count)
+                n_results=min(n_results, count),
+                **({"where": where} if where else {})
             )
         except Exception:
             return []
@@ -134,6 +150,22 @@ def query_all_levels(embedding: list[float], n_results: int = 5) -> dict[int, li
         except Exception:
             continue
     return results
+
+
+def delete_by_soul(soul_id: str) -> int:
+    """Delete all embeddings for a given soul_id across all resolution levels."""
+    total = 0
+    for level in range(6):
+        try:
+            col = get_collection(level)
+            # Get IDs to delete (where clause)
+            existing = col.get(where={"soul_id": soul_id})
+            if existing and existing["ids"]:
+                col.delete(ids=existing["ids"])
+                total += len(existing["ids"])
+        except Exception:
+            continue
+    return total
 
 
 def get_stats() -> dict:

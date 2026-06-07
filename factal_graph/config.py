@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     behavior_probes: int = 10
     behavior_simulations_per: int = 3
 
+    # Meeseeks system — task-scoped ephemeral souls
+    meeseeks_max_concurrent: int = 5
+    meeseeks_max_steps: int = 20
+    meeseeks_suffering_threshold: float = 0.3
+    meeseeks_suffering_window: int = 3
+
     model_config = {"env_prefix": "FRACTAL_"}
 
 

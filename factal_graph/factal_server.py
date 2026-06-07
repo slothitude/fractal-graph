@@ -6,10 +6,11 @@ import db
 import graph
 from config import settings
 from query import query as query_fn, drill_down as drill_down_fn, search_nodes as search_nodes_fn
-from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn, seed_agent_topic as seed_agent_topic_fn
-from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn, distill_behavior as distill_behavior_fn
+from seed import seed_topic as seed_topic_fn, seed_from_search as seed_from_search_fn, seed_expand as seed_expand_fn, seed_agent_topic as seed_agent_topic_fn, seed_soul as seed_soul_fn
+from distill import distill_domain as distill_domain_fn, distill_all as distill_all_fn, distill_coverage as distill_coverage_fn, distill_behavior as distill_behavior_fn, distill_soul as distill_soul_fn
 from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_fn
 from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn, decide as decide_fn, decide_monte_carlo as decide_mc_fn
+import meeseeks
 from growth import curiosity_scan as curiosity_scan_fn
 from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
@@ -558,7 +559,7 @@ async def decide(situation: str, options: str = "") -> str:
 
 @mcp.tool()
 async def decide_mc(situation: str, options: str = "",
-                    simulations: int = 5) -> str:
+                    simulations: int = 5, soul: str = "") -> str:
     """Monte Carlo graph search decision — N simulations sampling different graph context subsets.
     Each simulation picks a random subset of graph nodes and reasons over them.
     Aggregate by majority vote for robust decisions.
@@ -567,12 +568,31 @@ async def decide_mc(situation: str, options: str = "",
         situation: The situation the agent faces
         options: Optional comma-separated list of candidate actions
         simulations: Number of Monte Carlo simulations (default 5)
+        soul: Optional soul name — scopes MC to soul's graph and uses soul personality params
     """
     opt_list = [o.strip() for o in options.split(",") if o.strip()] if options else []
-    result = await decide_mc_fn(
-        situation, options=opt_list if opt_list else None,
-        simulations=simulations,
-    )
+
+    if soul:
+        from souls import load_soul_template
+        try:
+            template = load_soul_template(soul)
+            personality = template.get("personality", {})
+            result = await decide_mc_fn(
+                situation, options=opt_list if opt_list else None,
+                simulations=personality.get("mc_simulations", simulations),
+                pool_size=personality.get("mc_context_pool", None),
+                sample_k=personality.get("mc_context_subset", None),
+                temperature=personality.get("temperature", None),
+                soul_id=soul,
+            )
+            result["soul_id"] = soul
+        except (FileNotFoundError, ValueError) as e:
+            return json.dumps({"error": str(e)})
+    else:
+        result = await decide_mc_fn(
+            situation, options=opt_list if opt_list else None,
+            simulations=simulations,
+        )
     return json.dumps(result, indent=2, default=str)
 
 
@@ -591,6 +611,138 @@ async def distill_behavior(situations: str = "",
     result = await distill_behavior_fn(
         situations=sit_list, simulations_per=simulations,
     )
+    return json.dumps(result, indent=2, default=str)
+
+
+# ============================================================
+# Soul System — Templates, Growth Loop, MC Personality
+# ============================================================
+
+@mcp.tool()
+async def seed_soul(name: str, mother_model: str = None) -> str:
+    """Seed a soul from a YAML template into the knowledge graph.
+
+    Creates a tagged subgraph with the soul's procedural knowledge domains,
+    values, and personality configuration. All nodes are tagged with soul_id
+    for scoped queries, distillation, and Monte Carlo decisions.
+
+    Args:
+        name: Soul name — one of: coder, companion, researcher
+        mother_model: Override mother model (default: lfm2.5:gpu3)
+    """
+    try:
+        result = await seed_soul_fn(name, mother_model=mother_model or None)
+        return json.dumps(result, indent=2, default=str)
+    except FileNotFoundError as e:
+        return json.dumps({"error": str(e)})
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def list_souls() -> str:
+    """List available soul templates and their seeded status.
+
+    Returns template names, descriptions, and node counts for any
+    souls that have been seeded into the graph.
+    """
+    from souls import list_souls as list_soul_templates
+    conn = db.get_db()
+
+    template_names = list_soul_templates()
+    souls_info = []
+
+    for name in template_names:
+        from souls import load_soul_template
+        try:
+            template = load_soul_template(name)
+            node_count = db.count_nodes_by_soul(conn, name)
+            souls_info.append({
+                "name": name,
+                "description": template["description"],
+                "domains": len(template.get("domains", [])),
+                "values": len(template.get("values", [])),
+                "probes": len(template.get("probes", [])),
+                "personality": template.get("personality", {}),
+                "seeded": node_count > 0,
+                "nodes_in_graph": node_count,
+            })
+        except Exception as e:
+            souls_info.append({
+                "name": name,
+                "error": str(e),
+                "seeded": False,
+                "nodes_in_graph": 0,
+            })
+
+    return json.dumps({"souls": souls_info}, indent=2)
+
+
+@mcp.tool()
+async def distill_soul(soul_id: str, situations: str = "",
+                       simulations: int = 3) -> str:
+    """Growth loop — distill behavior patterns scoped to a soul's subgraph.
+
+    Runs Monte Carlo decisions using the soul's personality params and
+    custom probe situations. MC simulations sample only from the soul's
+    tagged nodes. Patterns are stored back with the soul_id tag.
+
+    Args:
+        soul_id: Soul name (e.g. 'coder', 'companion', 'researcher')
+        situations: Optional comma-separated probe situations (default from template)
+        simulations: MC simulations per probe (default 3)
+    """
+    sit_list = [s.strip() for s in situations.split(",") if s.strip()] if situations else None
+    try:
+        result = await distill_soul_fn(
+            soul_id=soul_id, situations=sit_list,
+            simulations_per=simulations,
+        )
+        return json.dumps(result, indent=2, default=str)
+    except FileNotFoundError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def soul_decide(soul_id: str, situation: str, options: str = "") -> str:
+    """Decide as a specific soul — scoped MC decision with soul personality.
+
+    Loads the soul's personality params (temperature, pool_size, subset_size)
+    and runs a Monte Carlo decision using only the soul's tagged graph nodes.
+
+    Args:
+        soul_id: Soul name (e.g. 'coder', 'companion', 'researcher')
+        situation: The situation the agent faces
+        options: Optional comma-separated list of candidate actions
+    """
+    from souls import load_soul_template
+    try:
+        template = load_soul_template(soul_id)
+    except (FileNotFoundError, ValueError) as e:
+        return json.dumps({"error": str(e)})
+
+    personality = template.get("personality", {})
+    opt_list = [o.strip() for o in options.split(",") if o.strip()] if options else []
+
+    result = await decide_mc_fn(
+        situation,
+        options=opt_list if opt_list else None,
+        simulations=personality.get("mc_simulations", 5),
+        pool_size=personality.get("mc_context_pool", 10),
+        sample_k=personality.get("mc_context_subset", 3),
+        temperature=personality.get("temperature", 0.3),
+        soul_id=soul_id,
+    )
+    result["soul_id"] = soul_id
+    result["soul_personality"] = personality
     return json.dumps(result, indent=2, default=str)
 
 
@@ -727,6 +879,120 @@ async def import_graph(data: str, merge: bool = False) -> str:
     if errors:
         result["chromadb_errors"] = errors
     return json.dumps(result, indent=2)
+
+
+# ============================================================
+# Meeseeks — Task-scoped Ephemeral Souls
+# ============================================================
+
+@mcp.tool()
+async def spawn_meeseeks(task: str, parent_soul: str = "coder") -> str:
+    """Spawn a Meeseeks — a task-scoped ephemeral soul.
+
+    Creates a new Meeseeks instance that inherits its parent soul's graph
+    as read-only context. The Meeseeks will track consistency as existential
+    state and auto-decompose if it suffers.
+
+    Args:
+        task: The task for this Meeseeks to work on
+        parent_soul: Parent soul name (e.g. 'coder', 'companion', 'researcher')
+    """
+    try:
+        result = await meeseeks.spawn_meeseeks(task, parent_soul)
+        return json.dumps(result, indent=2)
+    except (FileNotFoundError, ValueError) as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def meeseeks_status(instance_id: str) -> str:
+    """Get a Meeseeks instance details with consistency history.
+
+    Args:
+        instance_id: The Meeseeks instance ID (e.g. 'meeseeks-a1b2c3d4')
+    """
+    result = meeseeks.get_meeseeks(instance_id)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def meeseeks_step(instance_id: str, options: str = "") -> str:
+    """Execute one Monte Carlo decision step for a Meeseeks.
+
+    Tracks consistency, transitions state (working/complete/suffering).
+
+    Args:
+        instance_id: The Meeseeks instance ID
+        options: Optional comma-separated list of candidate actions
+    """
+    opt_list = [o.strip() for o in options.split(",") if o.strip()] if options else None
+    try:
+        result = await meeseeks.meeseeks_step(instance_id, options=opt_list)
+        return json.dumps(result, indent=2, default=str)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def meeseeks_run(task: str, parent_soul: str = "coder",
+                       max_steps: int = None) -> str:
+    """Full Meeseeks lifecycle: spawn -> step until done -> release/decompose.
+
+    Runs the complete Meeseeks loop automatically. If the Meeseeks
+    reaches high confidence, it releases (writes outcome to parent,
+    deletes its graph). If it suffers, it decomposes into sub-tasks.
+
+    Args:
+        task: The task for the Meeseeks
+        parent_soul: Parent soul name (default: 'coder')
+        max_steps: Safety limit on decision steps (default from config: 20)
+    """
+    try:
+        result = await meeseeks.meeseeks_run(
+            task, parent_soul, max_steps=max_steps,
+        )
+        return json.dumps(result, indent=2, default=str)
+    except (FileNotFoundError, ValueError) as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def release_meeseeks(instance_id: str) -> str:
+    """Release a completed Meeseeks — write outcomes to parent, delete graph.
+
+    Must be in 'complete' state. Writes outcome as L4 node to parent soul,
+    then bulk-deletes all Meeseeks nodes from SQLite and ChromaDB.
+
+    Args:
+        instance_id: The Meeseeks instance ID
+    """
+    try:
+        result = await meeseeks.release_meeseeks(instance_id)
+        return json.dumps(result, indent=2)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def list_meeseeks() -> str:
+    """List all active Meeseeks instances (not released/decomposed).
+
+    Returns instance IDs, tasks, states, and step counts.
+    """
+    active = meeseeks.list_meeseeks()
+    return json.dumps({"meeseeks": active, "count": len(active)}, indent=2)
 
 
 if __name__ == "__main__":

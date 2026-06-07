@@ -30,10 +30,11 @@ async def _warmup_model(model: str, url: str) -> float:
 
 
 async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,
-                    timeout: float = 60.0) -> str:
+                    timeout: float = 60.0, temperature: float = None) -> str:
     """Call the 2B LLM. Returns raw response text."""
     model = model or settings.llm_model
     url = settings.llm_url
+    temp = temperature if temperature is not None else 0.2
     try:
         await _warmup_model(model, url)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -45,7 +46,7 @@ async def _llm_call(prompt: str, model: str = None, num_predict: int = 512,
                     "stream": False,
                     "keep_alive": "5m",
                     "options": {
-                        "temperature": 0.2,
+                        "temperature": temp,
                         "num_ctx": 8192,
                     },
                     "think": False,
@@ -318,7 +319,8 @@ async def answer_with_triad(question: str) -> dict:
 # --- Agent Decision Mode ---
 
 def _gather_procedural_context(prompt_embedding: list[float], top_k: int = 5,
-                               max_tokens: int = 4000) -> dict:
+                               max_tokens: int = 4000,
+                               soul_id: str = None) -> dict:
     """Gather context biased toward L2-L4 (patterns, rules, examples).
 
     Unlike gather_context which hits all 6 levels equally, this focuses
@@ -328,6 +330,9 @@ def _gather_procedural_context(prompt_embedding: list[float], top_k: int = 5,
     - L4: specific rules (exact conditions, actions, outcomes)
 
     Weighting: 0.5*L2 + 0.3*L3 + 0.2*L4
+
+    Args:
+        soul_id: Optional soul filter — only gather from this soul's nodes
 
     Returns:
         Same format as gather_context: {direct_hits, parents, edges, total_tokens}
@@ -344,7 +349,8 @@ def _gather_procedural_context(prompt_embedding: list[float], top_k: int = 5,
     seen_ids = set()
 
     for level, weight in level_weights.items():
-        hits = query_level(prompt_embedding, level, n_results=top_k)
+        hits = query_level(prompt_embedding, level, n_results=top_k,
+                          soul_id=soul_id)
         for hit in hits:
             node_id = int(hit["node_id"])
             if node_id in seen_ids:
@@ -419,7 +425,8 @@ def _gather_procedural_context(prompt_embedding: list[float], top_k: int = 5,
 
 
 async def decide_synthesize(situation: str, options: list[str],
-                            context_str: str) -> dict:
+                            context_str: str,
+                            temperature: float = None) -> dict:
     """2B generates a decision from procedural context.
 
     Returns:
@@ -462,7 +469,8 @@ async def decide_synthesize(situation: str, options: list[str],
         "- Keep reasoning under 3 sentences\n"
     )
 
-    raw = await _llm_call(prompt, num_predict=settings.max_answer_tokens, timeout=30.0)
+    raw = await _llm_call(prompt, num_predict=settings.max_answer_tokens, timeout=30.0,
+                          temperature=temperature)
     parsed = _parse_json(raw)
 
     if not parsed or "action" not in parsed:
@@ -552,12 +560,19 @@ def _gather_procedural_context_sampled(
     pool_size: int = 10,
     sample_k: int = 3,
     max_tokens: int = 3000,
+    soul_id: str = None,
+    soul_ids: list[str] = None,
 ) -> dict:
     """Gather a large candidate pool from L2/L3/L4, return a random k-subset.
 
     Unlike _gather_procedural_context which returns the best-ranked nodes,
     this gathers a larger pool then randomly samples k nodes for one
     Monte Carlo simulation. Each simulation sees different context.
+
+    Args:
+        soul_id: Optional soul filter — only sample from this soul's nodes
+        soul_ids: Optional list of soul_ids — sample from multiple souls (Meeseeks inheritance).
+                  When provided, takes precedence over soul_id.
 
     Returns:
         {nodes: [list of formatted node strings], pool_size: int}
@@ -571,8 +586,32 @@ def _gather_procedural_context_sampled(
     pool = []
     seen_ids = set()
 
+    # Build where clause for soul filtering
+    # soul_ids (Meeseeks inheritance) takes precedence over single soul_id
+    effective_soul_id = None
+    if soul_ids:
+        effective_soul_id = soul_ids  # passed as list, handled below
+    elif soul_id:
+        effective_soul_id = soul_id
+
     for level, weight in level_weights.items():
-        hits = query_level(prompt_embedding, level, n_results=pool_size)
+        if isinstance(effective_soul_id, list) and len(effective_soul_id) > 1:
+            # Query each soul_id separately and merge results
+            hits = []
+            for sid in effective_soul_id:
+                hits.extend(query_level(prompt_embedding, level, n_results=pool_size,
+                                        soul_id=sid))
+            # Dedup by node_id — keep best (lowest distance)
+            best_by_id = {}
+            for hit in hits:
+                nid = hit["node_id"]
+                if nid not in best_by_id or hit["distance"] < best_by_id[nid]["distance"]:
+                    best_by_id[nid] = hit
+            hits = list(best_by_id.values())
+        else:
+            single_id = effective_soul_id[0] if isinstance(effective_soul_id, list) else effective_soul_id
+            hits = query_level(prompt_embedding, level, n_results=pool_size,
+                              soul_id=single_id)
         for hit in hits:
             node_id = int(hit["node_id"])
             if node_id in seen_ids:
@@ -707,6 +746,11 @@ async def decide_monte_carlo(
     options: list[str] = None,
     simulations: int = None,
     model: str = None,
+    pool_size: int = None,
+    sample_k: int = None,
+    temperature: float = None,
+    soul_id: str = None,
+    soul_ids: list[str] = None,
 ) -> dict:
     """Monte Carlo graph search decision — N simulations sampling different
     graph context subsets. Each simulation picks a random subset of graph
@@ -717,6 +761,11 @@ async def decide_monte_carlo(
         options: Optional list of candidate actions
         simulations: Number of MC simulations (default from config)
         model: Model to use (default from config)
+        pool_size: Candidate nodes per level (default from config)
+        sample_k: Nodes per simulation subset (default from config)
+        temperature: LLM temperature (default 0.2)
+        soul_id: Optional soul filter — scope context to this soul
+        soul_ids: Optional list of soul_ids — scope to multiple souls (Meeseeks inheritance)
 
     Returns:
         {situation, action, reasoning, confidence, relevant_patterns, risks,
@@ -728,8 +777,8 @@ async def decide_monte_carlo(
     t0 = time.time()
     sims = simulations or settings.mc_simulations
     m = model or settings.llm_model
-    pool_size = settings.mc_context_pool
-    sample_k = settings.mc_context_subset
+    pool_size = pool_size or settings.mc_context_pool
+    sample_k = sample_k or settings.mc_context_subset
 
     # Step 1: Embed once
     t1 = time.time()
@@ -749,6 +798,7 @@ async def decide_monte_carlo(
             for attempt in range(2):
                 sampled = _gather_procedural_context_sampled(
                     embedding, pool_size=pool_size, sample_k=sample_k,
+                    soul_id=soul_id, soul_ids=soul_ids,
                 )
                 context_str = format_context_for_llm({
                     "direct_hits": sampled["nodes"],
@@ -758,6 +808,7 @@ async def decide_monte_carlo(
                 })
                 decision = await decide_synthesize(
                     situation, options or [], context_str,
+                    temperature=temperature,
                 )
                 # If decision has real action (not a fallback), use it
                 if (decision.get("confidence", 0) > 0.3

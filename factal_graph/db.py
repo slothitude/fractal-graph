@@ -76,11 +76,19 @@ def _ensure_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_nodes_source ON nodes(source_url);
     """)
 
+    # Migration: add soul_id column to existing nodes table
+    try:
+        conn.execute("ALTER TABLE nodes ADD COLUMN soul_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_soul ON nodes(soul_id)")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
 
 # --- Node CRUD ---
 
 def insert_node(conn, content, resolution_level=2, parent_id=None,
-                confidence=0.5, bbox=None, source_url=None, metadata=None) -> int:
+                confidence=0.5, bbox=None, source_url=None, metadata=None,
+                soul_id=None) -> int:
     # Validate parent exists before insert — prevent FK constraint failures
     if parent_id is not None:
         parent = conn.execute("SELECT id FROM nodes WHERE id = ?", (parent_id,)).fetchone()
@@ -90,11 +98,11 @@ def insert_node(conn, content, resolution_level=2, parent_id=None,
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         """INSERT INTO nodes (content, resolution_level, parent_id, confidence,
-           bbox, source_url, metadata, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           bbox, source_url, metadata, soul_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (content, resolution_level, parent_id, confidence,
          json.dumps(bbox) if bbox else None, source_url,
-         json.dumps(metadata) if metadata else None, now, now)
+         json.dumps(metadata) if metadata else None, soul_id, now, now)
     )
     _retry_commit(conn)
     return cursor.lastrowid
@@ -142,6 +150,30 @@ def get_nodes_by_resolution(conn, level: int) -> list[dict]:
     return results
 
 
+def get_nodes_by_soul(conn, soul_id: str) -> list[dict]:
+    """Get all nodes belonging to a soul."""
+    rows = conn.execute(
+        "SELECT * FROM nodes WHERE soul_id = ?", (soul_id,)
+    ).fetchall()
+    results = []
+    for row in rows:
+        d = dict(row)
+        if d.get("bbox"):
+            d["bbox"] = json.loads(d["bbox"])
+        if d.get("metadata"):
+            d["metadata"] = json.loads(d["metadata"])
+        results.append(d)
+    return results
+
+
+def count_nodes_by_soul(conn, soul_id: str) -> int:
+    """Count nodes belonging to a soul."""
+    row = conn.execute(
+        "SELECT COUNT(*) as c FROM nodes WHERE soul_id = ?", (soul_id,)
+    ).fetchone()
+    return row["c"] if row else 0
+
+
 def update_node_confidence(conn, node_id: int, confidence: float):
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -167,6 +199,19 @@ def delete_node(conn, node_id: int):
     )
     conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
     _retry_commit(conn)
+
+
+def delete_nodes_by_soul(conn, soul_id: str) -> int:
+    """Delete all nodes and their edges for a given soul_id."""
+    conn.execute("""
+        DELETE FROM edges WHERE from_node_id IN
+            (SELECT id FROM nodes WHERE soul_id = ?)
+        OR to_node_id IN
+            (SELECT id FROM nodes WHERE soul_id = ?)
+    """, (soul_id, soul_id))
+    count = conn.execute("DELETE FROM nodes WHERE soul_id = ?", (soul_id,)).rowcount
+    _retry_commit(conn)
+    return count
 
 
 # --- Edge CRUD ---
