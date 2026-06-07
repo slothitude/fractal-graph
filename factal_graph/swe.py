@@ -235,11 +235,21 @@ async def ingest_repo_cached(repo_path: str, repo_soul_id: str,
     existing_count = db.count_nodes_by_soul(conn, repo_soul_id)
     cached_commit = _get_cached_commit(repo_soul_id)
 
+    if max_files is None:
+        max_files = settings.swe_bench_max_files_per_repo
+
     if existing_count > 0:
         if cached_commit == commit_hash:
-            logger.info("Cache HIT for %s at commit %s", repo_soul_id, commit_hash[:8])
-            return {"status": "cached", "nodes_created": 0,
-                    "files_processed": existing_count}
+            # Also check if we need more files than previously ingested
+            cached_files = l0_data.get("metadata", {}).get("max_files", 0) if (l0_data := _get_repo_l0_node(repo_soul_id)) else 0
+            if cached_files >= max_files:
+                logger.info("Cache HIT for %s at commit %s (%d files)",
+                            repo_soul_id, commit_hash[:8], existing_count)
+                return {"status": "cached", "nodes_created": 0,
+                        "files_processed": existing_count}
+            else:
+                logger.info("Cache HIT commit but need more files (%d < %d), re-ingesting %s",
+                            cached_files, max_files, repo_soul_id)
         else:
             logger.info("Cache MISS (commit changed %s -> %s), re-ingesting %s",
                         cached_commit[:8], commit_hash[:8], repo_soul_id)
@@ -252,9 +262,6 @@ async def ingest_repo_cached(repo_path: str, repo_soul_id: str,
     else:
         logger.info("No cache for %s, ingesting fresh", repo_soul_id)
 
-    if max_files is None:
-        max_files = settings.swe_bench_max_files_per_repo
-
     result = await code_ingest.ingest_codebase(repo_path, repo_soul_id, max_files)
 
     # Store commit hash in L0 node metadata
@@ -262,6 +269,7 @@ async def ingest_repo_cached(repo_path: str, repo_soul_id: str,
     if l0:
         meta = l0.get("metadata", {})
         meta["commit_hash"] = commit_hash
+        meta["max_files"] = max_files
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "UPDATE nodes SET metadata = ?, updated_at = ? WHERE id = ?",
@@ -412,13 +420,72 @@ def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
 
     Returns dict or None if parsing fails.
     """
-    # Extract file path from action text
-    filepath_match = re.search(r'["\']([^"\']+\.\w+)["\']', action_text)
-    filepath = filepath_match.group(1) if filepath_match else ""
+    conn = db.get_db()
+    filepath = ""
+    target = ""
 
-    # Fuzzy match against L2 file nodes in repo graph
+    # 1. Extract backtick-quoted code references: `ClassName.method` or `function`
+    backtick_refs = re.findall(r'`([A-Za-z_]\w*(?:\.[A-Za-z_]\w+)*)`', action_text)
+
+    # 2. Extract quoted file paths
+    filepath_match = re.search(r'["\']([^"\']+\.\w+)["\']', action_text)
+
+    # 3. Extract function/class keywords: "method to_string", "class Foo"
+    kw_match = re.search(
+        r'(?:function|method|class|in\s+|to\s+|in\s+`?)'
+        r'(?:the\s+)?'
+        r'`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w+)*)`?',
+        action_text, re.IGNORECASE,
+    )
+
+    # Determine target from backtick refs or keyword match
+    if backtick_refs:
+        # Use the most specific backtick ref (longest, prefer ClassName.method)
+        target = max(backtick_refs, key=len)
+    elif kw_match:
+        target = kw_match.group(1)
+
+    # If filepath was explicitly quoted, use it
+    if filepath_match:
+        filepath = filepath_match.group(1)
+
+    # Try to resolve filepath from the repo graph via SQL
+    if not filepath and target:
+        class_name, method_name = (target.split(".", 1) + [""])[:2]
+        # Search terms: full target, then just the method/function name
+        search_terms = [target]
+        if method_name:
+            search_terms.append(method_name)
+
+        for term in search_terms:
+            # Search L4 (methods) and L3 (functions/classes) by content
+            for level in [4, 3]:
+                rows = conn.execute(
+                    "SELECT id, content, metadata, parent_id FROM nodes "
+                    "WHERE soul_id = ? AND resolution_level = ? "
+                    "AND content LIKE ?",
+                    (repo_soul_id, level, f"%{term}%"),
+                ).fetchall()
+                for row in rows:
+                    meta = json.loads(row["metadata"]) if row["metadata"] else {}
+                    parent_id = row["parent_id"]
+                    if parent_id:
+                        parent = conn.execute(
+                            "SELECT metadata FROM nodes WHERE id = ?", (parent_id,)
+                        ).fetchone()
+                        if parent:
+                            pmeta = json.loads(parent["metadata"]) if parent["metadata"] else {}
+                            fp = pmeta.get("path", "")
+                            if fp:
+                                filepath = fp
+                                break
+                if filepath:
+                    break
+            if filepath:
+                break
+
+    # Fuzzy match filepath against L2 file nodes if we have a candidate
     if filepath:
-        conn = db.get_db()
         files = db.get_nodes_by_soul(conn, repo_soul_id)
         best_match = filepath
         best_score = 0
@@ -426,16 +493,11 @@ def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
             meta = node.get("metadata", {})
             if meta.get("type") == "file":
                 node_path = meta.get("path", "")
-                # Simple overlap scoring
                 score = sum(1 for a, b in zip(filepath, node_path) if a == b)
                 if score > best_score:
                     best_score = score
                     best_match = node_path
         filepath = best_match
-
-    # Extract function/class context
-    func_match = re.search(r'(?:function|method|class)\s+["\']?(\w+)["\']?', action_text, re.IGNORECASE)
-    target = func_match.group(1) if func_match else ""
 
     return {
         "filepath": filepath,
@@ -459,8 +521,18 @@ async def generate_patch(edit: dict, repo_path: str, issue_text: str) -> dict | 
     if not filepath:
         return None
 
-    # Build full path
-    full_path = os.path.join(repo_path, filepath)
+    # Build full path — filepath from graph metadata is relative to project root
+    if not os.path.isabs(filepath):
+        # Try as repo-relative first, then project-root-relative
+        repo_relative = os.path.join(repo_path, os.path.basename(filepath))
+        if os.path.exists(repo_relative):
+            full_path = repo_relative
+        else:
+            # Filepath is relative to project root (e.g., data/swe_repos/...)
+            project_root = str(Path(__file__).parent)
+            full_path = os.path.join(project_root, filepath)
+    else:
+        full_path = filepath
     if not os.path.exists(full_path):
         # Try finding it by searching common locations
         for root, dirs, files in os.walk(repo_path):
@@ -527,6 +599,12 @@ async def generate_patch(edit: dict, repo_path: str, issue_text: str) -> dict | 
     # Remove markdown fences if present
     patch_text = re.sub(r"^```(?:diff)?\s*\n?", "", patch_text)
     patch_text = re.sub(r"\n?```\s*$", "", patch_text)
+    # Remove duplicate diff --git headers
+    patch_text = re.sub(
+        r"(diff --git a/[^\n]+\n){2,}",
+        lambda m: m.group(0).split("\n")[0] + "\n",
+        patch_text,
+    )
 
     return {
         "filepath": filepath,
@@ -821,7 +899,42 @@ def main():
             sys.exit(1)
 
         soul_id = f"swe-{inst['repo'].replace('/', '-')}"
-        result = asyncio.run(solve_instance(inst, soul_id, args.max_steps))
+
+        # Auto-ingest if needed (wrong commit, no data, or need more files)
+        async def _solve_with_ingest():
+            cached = _get_cached_commit(soul_id)
+            need_ingest = False
+
+            if not cached:
+                need_ingest = True
+                print(f"No cached data for {soul_id}")
+            elif cached != inst["base_commit"]:
+                need_ingest = True
+                print(f"Commit mismatch: cached={cached[:8]}, need={inst['base_commit'][:8]}")
+            else:
+                # Check if max_files is sufficient
+                l0 = _get_repo_l0_node(soul_id)
+                cached_files = l0.get("metadata", {}).get("max_files", 0) if l0 else 0
+                requested_files = args.max_files or settings.swe_bench_max_files_per_repo
+                if cached_files < requested_files:
+                    need_ingest = True
+                    print(f"Need more files: cached={cached_files}, requested={requested_files}")
+
+            if need_ingest:
+                max_files = args.max_files or settings.swe_bench_max_files_per_repo
+                print(f"Ingesting {inst['repo']} @ {inst['base_commit'][:8]}...")
+                repo_path = clone_repo(inst["repo"])
+                if not checkout_commit(repo_path, inst["base_commit"]):
+                    print(f"ERROR: Failed to checkout {inst['base_commit'][:8]}")
+                    return {"instance_id": inst["instance_id"],
+                            "status": "checkout_failed"}
+                await ingest_repo_cached(repo_path, soul_id, inst["base_commit"],
+                                         max_files)
+                await attach_issue_to_repo(inst, soul_id)
+
+            return await solve_instance(inst, soul_id, args.max_steps)
+
+        result = asyncio.run(_solve_with_ingest())
         print(json.dumps(result, indent=2))
 
     elif args.score:
