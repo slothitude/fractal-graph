@@ -83,14 +83,15 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 | `web_ui.py`       | Flask Web UI -- graph visualization, search, export/import endpoints |
 | `templates/index.html` | D3.js force-directed graph, side panel, search, export/import buttons |
 | `meeseeks.py`     | Meeseeks system -- task-scoped ephemeral souls with lifecycle management |
+| `code_ingest.py`  | Code ingestion -- regex-based repo parsing into L0-L5 hierarchy, issue/diff ingestion |
 | `souls/`          | Soul templates -- YAML configs for named tagged subgraphs (coder, companion, researcher) |
-| `factal_server.py`| MCP server -- 46 tools via FastMCP stdio |
+| `factal_server.py`| MCP server -- 49 tools via FastMCP stdio |
 | `search_trigger.py`| Search trigger layer -- rate-limited, deduped web-grounded evidence |
 
 ### External Dependencies
 - **searchMCP** (`C:/Users/aaron/searchmcp/core.py`) -- search + text extraction via SearXNG fan-out and trafilatura/BeautifulSoup.
 
-## MCP Tools (46 total)
+## MCP Tools (49 total)
 
 ### Ask -- 2B Reasoning
 - `ask(question, auto_expand)` -- Primary tool. embed -> classify (2B) -> gather context -> synthesize (2B). Optional auto-expand on low confidence.
@@ -154,12 +155,37 @@ Most knowledge graphs are flat. Fractal Graph organizes knowledge as a hierarchy
 - `soul_decide(soul_id, situation, options)` -- Scoped MC decision using soul's personality params and graph
 
 ### Meeseeks — Task-scoped Ephemeral Souls
-- `spawn_meeseeks(task, parent_soul)` -- Create a Meeseeks instance for a task (inherits parent soul graph)
+- `spawn_meeseeks(task, parent_soul, repo_soul_id)` -- Create a Meeseeks instance for a task (inherits parent soul + optional repo graph)
 - `meeseeks_status(instance_id)` -- Get instance details with consistency history
 - `meeseeks_step(instance_id, options)` -- Execute one MC decision step (tracks consistency as existential state)
 - `meeseeks_run(task, parent_soul, max_steps)` -- Full lifecycle: spawn → step until done → release or decompose
 - `release_meeseeks(instance_id)` -- Write outcome to parent soul, delete ephemeral graph
 - `list_meeseeks()` -- List all active (not released/decomposed) instances
+
+### Code Ingestion — Per-Repo Graph Seeding (Phase 22)
+- `ingest_codebase(repo_path, soul_id, max_files)` -- Walk a repo, extract modules/files/functions/imports into L0-L5 hierarchy. Tags all nodes with soul_id for scoped Meeseeks queries.
+- `ingest_issue(issue_text, repo_soul_id)` -- Ingest a GitHub issue: extract symptoms (error keywords), code blocks, stack traces as L3-L5 nodes.
+- `ingest_diff(diff_text, repo_soul_id)` -- Parse unified diff: hunk change nodes (L4), new function/class definitions (L3).
+
+#### Code Resolution Mapping
+
+| Level | Code Concept | Example |
+|-------|-------------|---------|
+| L0 | Repository identity | "fractal-graph — resolution-aware knowledge graph" |
+| L1 | Module/package | "fractal-graph/query — query engine module" |
+| L2 | File | "db.py — SQLite storage layer" |
+| L3 | Function/class | "def insert_node(conn, content, ...) — Insert a node into the graph" |
+| L4 | Import/dependency | "imports: sqlite3, json, time, datetime" |
+| L5 | Code snippet | "db.py:98-108 — INSERT INTO nodes (...) VALUES (...)" |
+
+#### SWE-bench Integration
+
+```
+ingest_codebase("django/django", soul_id="repo-django")
+ingest_issue(issue_text, "repo-django")
+spawn_meeseeks("Fix the empty filter bug", parent_soul="coder", repo_soul_id="repo-django")
+# Meeseeks soul_ids = [meeseeks_id, coder, repo-django] → code-aware decisions
+```
 
 ### Export / Import
 - `export_graph()` -- Export entire graph as portable JSON (no embeddings)
@@ -322,6 +348,9 @@ All settings via environment variables with `FRACTAL_` prefix:
 | `supports` | either | Supports the other |
 | `derived_from` | child->parent | Derived from source |
 | `resolution_conflict` | judge->judges | Judges disagree |
+| `contains` | parent->child | Module contains file, file contains function |
+| `imports_from` | function->module | Function imports from another module |
+| `mentions` | issue->symptom | Issue mentions a symptom |
 
 ## Setup
 
