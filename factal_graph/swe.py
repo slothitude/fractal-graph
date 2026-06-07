@@ -658,6 +658,18 @@ async def solve_instance(instance: dict, repo_soul_id: str,
             confidence = decision.get("confidence", 0.0)
             action = decision.get("action", "")
 
+            # Handle nested JSON action — 2B sometimes returns the full JSON
+            # object as a string in the action field
+            if isinstance(action, dict):
+                action = action.get("action", json.dumps(action))
+            elif isinstance(action, str):
+                try:
+                    parsed = json.loads(action)
+                    if isinstance(parsed, dict) and "action" in parsed:
+                        action = parsed["action"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             step_log = {
                 "step": step + 1,
                 "state": state,
@@ -960,6 +972,27 @@ def main():
 
         result = asyncio.run(_solve_with_ingest())
         print(json.dumps(result, indent=2))
+
+        # Save prediction to predictions.json
+        pred_path = Path(settings.swe_bench_data_cache) / "predictions.json"
+        pred_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = []
+        if pred_path.exists():
+            try:
+                existing = json.loads(pred_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        # Update or append
+        found = False
+        for i, p in enumerate(existing):
+            if p.get("instance_id") == result["instance_id"]:
+                existing[i] = result
+                found = True
+                break
+        if not found:
+            existing.append(result)
+        pred_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        logger.info("Prediction saved to %s (%d total)", pred_path, len(existing))
 
     elif args.score:
         scores = score_results(args.score)

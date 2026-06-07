@@ -649,8 +649,10 @@ def _gather_procedural_context_sampled(
     return {"nodes": nodes, "pool_size": len(pool), "sampled_count": len(nodes)}
 
 
-def _word_overlap(s1: str, s2: str) -> float:
+def _word_overlap(s1, s2) -> float:
     """Ratio of shared words between two strings."""
+    s1 = str(s1) if not isinstance(s1, str) else s1
+    s2 = str(s2) if not isinstance(s2, str) else s2
     if not s1 or not s2:
         return 0.0
     words1 = set(s1.lower().split())
@@ -673,11 +675,11 @@ def _cluster_actions(decisions: list[dict]) -> list[list[dict]]:
             continue
         cluster = [d]
         assigned.add(i)
-        action_i = d.get("action", "")
+        action_i = str(d.get("action", ""))
         for j in range(i + 1, len(decisions)):
             if j in assigned:
                 continue
-            action_j = decisions[j].get("action", "")
+            action_j = str(decisions[j].get("action", ""))
             if _word_overlap(action_i, action_j) >= 0.5:
                 cluster.append(decisions[j])
                 assigned.add(j)

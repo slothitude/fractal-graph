@@ -116,10 +116,11 @@ async def meeseeks_step(instance_id: str, options: list[str] = None) -> dict:
     """
     instance = _get_active(instance_id)
 
-    # Build soul_ids: own graph + parent soul (read-only inheritance) + optional repo graph
-    soul_ids = [instance_id, instance.parent_soul]
+    # Build soul_ids: own graph + repo graph (priority) + parent soul (fallback)
+    soul_ids = [instance_id]
     if instance.repo_soul_id:
         soul_ids.append(instance.repo_soul_id)
+    soul_ids.append(instance.parent_soul)
 
     # Run MC decision
     decision = await decide_monte_carlo(
@@ -213,15 +214,19 @@ async def release_meeseeks(instance_id: str) -> dict:
     # Write outcome node to parent soul graph
     outcome_text = f"Task completed: {instance.task[:80]}\nOutcome: {instance.outcome}"
     from chroma_store import upsert_node
+    # Persist outcome under repo_soul_id if available (scoped to repo),
+    # otherwise under parent_soul. This prevents context bleed between
+    # different repo solves sharing the same parent soul.
+    outcome_soul = instance.repo_soul_id or instance.parent_soul
     try:
         outcome_node_id = db.insert_node(
             conn, outcome_text, resolution_level=4,
-            confidence=0.8, soul_id=instance.parent_soul,
+            confidence=0.8, soul_id=outcome_soul,
             metadata={"meeseeks_instance": instance_id, "task": instance.task[:200]},
         )
         embedding = await embed(outcome_text)
         upsert_node(outcome_node_id, outcome_text, embedding, 4,
-                    confidence=0.8, soul_id=instance.parent_soul)
+                    confidence=0.8, soul_id=outcome_soul)
     except Exception as e:
         logger.warning("Failed to write outcome to parent: %s", e)
 
