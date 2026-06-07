@@ -45,12 +45,16 @@ logger = logging.getLogger(__name__)
 # --- Dataset Loader ---
 
 
-def load_swe_bench_split(split: str = "verified_lite") -> list[dict]:
-    """Load SWE-bench dataset from local cache or download from GitHub.
+def load_swe_bench_split(split: str = "verified_lite", max_instances: int = 0) -> list[dict]:
+    """Load SWE-bench dataset from local cache or HuggingFace.
 
     Returns list of instance dicts with keys:
         instance_id, repo, base_commit, problem_statement, hints_text,
         test_patch, patch, version, created_at
+
+    Args:
+        split: Dataset variant — "verified_lite" or "test"
+        max_instances: Limit loaded instances (0 = all)
     """
     cache_dir = Path(settings.swe_bench_data_cache)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -59,48 +63,77 @@ def load_swe_bench_split(split: str = "verified_lite") -> list[dict]:
     if cache_file.exists():
         logger.info("Loading cached dataset from %s", cache_file)
         with open(cache_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            instances = json.load(f)
+        if max_instances:
+            instances = instances[:max_instances]
+        return instances
 
-    # Download from SWE-bench GitHub releases
-    urls = {
-        "verified_lite": "https://github.com/princeton-nlp/SWE-bench/raw/master/swebench/harness/constants.py",
-    }
+    # Load from HuggingFace datasets library (streaming, no full download)
+    logger.info("Loading SWE-bench %s from HuggingFace", split)
+    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+    from datasets import load_dataset
 
-    # SWE-bench provides datasets via HuggingFace. Use the JSON version.
-    hf_url = {
-        "verified_lite": "https://raw.githubusercontent.com/princeton-nlp/SWE-bench/refs/heads/main/swebench/metrics/verify/verified_lite.jsonl",
-        "test": "https://raw.githubusercontent.com/princeton-nlp/SWE-bench/refs/heads/main/swebench/metrics/verify/test.jsonl",
-    }
+    ds = load_dataset("princeton-nlp/SWE-bench", split="test", streaming=True)
 
-    url = hf_url.get(split)
-    if not url:
-        raise ValueError(f"Unknown split: {split}. Available: {list(hf_url.keys())}")
+    # Filter: verified_lite is a subset (~300 instances)
+    verified_lite_ids = None
+    if split == "verified_lite":
+        verified_lite_ids = _load_verified_lite_ids()
 
-    logger.info("Downloading SWE-bench %s from %s", split, url)
-    import urllib.request
-    try:
-        with urllib.request.urlopen(url, timeout=120) as resp:
-            raw = resp.read().decode("utf-8")
-    except Exception as e:
-        logger.error("Failed to download SWE-bench dataset: %s", e)
-        raise
-
-    # Parse JSONL
     instances = []
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if line:
-            try:
-                instances.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    for inst in ds:
+        if verified_lite_ids is not None and inst["instance_id"] not in verified_lite_ids:
+            continue
+        # Keep only the fields we need
+        instances.append({
+            "instance_id": inst["instance_id"],
+            "repo": inst["repo"],
+            "base_commit": inst["base_commit"],
+            "problem_statement": inst["problem_statement"],
+            "hints_text": inst.get("hints_text", ""),
+            "test_patch": inst.get("test_patch", ""),
+            "patch": inst.get("patch", ""),
+            "version": inst.get("version", ""),
+            "created_at": inst.get("created_at", ""),
+        })
+        if max_instances and len(instances) >= max_instances:
+            break
+
+    logger.info("Loaded %d instances from HuggingFace", len(instances))
 
     # Cache locally
     with open(cache_file, "w", encoding="utf-8") as f:
         json.dump(instances, f, indent=2)
 
-    logger.info("Downloaded %d instances, cached to %s", len(instances), cache_file)
     return instances
+
+
+def _load_verified_lite_ids() -> set[str]:
+    """Load the set of verified_lite instance IDs from HuggingFace parquet."""
+    cache_dir = Path(settings.swe_bench_data_cache)
+    cache_file = cache_dir / "verified_lite_ids.json"
+
+    if cache_file.exists():
+        with open(cache_file, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+
+    import urllib.request
+    url = ("https://huggingface.co/api/datasets/"
+           "princeton-nlp/SWE-bench/parquet/verified_lite/train/0.parquet")
+    logger.info("Downloading verified_lite index from %s", url)
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            import pyarrow.parquet as pq
+            table = pq.read_table(resp)
+            ids = set(table.column("instance_id").to_pylist())
+    except Exception as e:
+        logger.warning("Failed to load verified_lite IDs, loading all: %s", e)
+        return None
+
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+    logger.info("Loaded %d verified_lite IDs", len(ids))
+    return ids
 
 
 # --- Git Operations ---
