@@ -11,7 +11,7 @@
 
   #stats-bar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-    display: flex; align-items: center; gap: 24px;
+    display: flex; align-items: center; gap: 16px;
     padding: 8px 20px; background: rgba(10,10,15,0.9);
     border-bottom: 1px solid #1a1a2e; backdrop-filter: blur(8px);
   }
@@ -103,6 +103,14 @@
     color: #555; font-size: 14px; z-index: 5;
   }
 
+  .io-btn {
+    background: #12121a; border: 1px solid #2a2a3e; border-radius: 6px;
+    padding: 5px 12px; color: #aaa; font-size: 12px; cursor: pointer;
+    transition: border-color 0.2s, color 0.2s; white-space: nowrap;
+  }
+  .io-btn:hover { border-color: #7b68ee; color: #7b68ee; }
+  #import-file { display: none; }
+
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
@@ -115,6 +123,9 @@
   <span class="stat" id="stat-nodes"></span>
   <span class="stat" id="stat-edges"></span>
   <span class="stat" id="stat-domains"></span>
+  <button class="io-btn" id="btn-export" title="Export graph as JSON">Export</button>
+  <button class="io-btn" id="btn-import" title="Import graph from JSON">Import</button>
+  <input type="file" id="import-file" accept=".json">
   <div id="search-box">
     <span class="icon">&#128269;</span>
     <input type="text" id="search-input" placeholder="Search nodes..." autocomplete="off">
@@ -435,6 +446,39 @@ window.addEventListener('resize', () => {
     simulation.force('center', d3.forceCenter(window.innerWidth / 2, window.innerHeight / 2));
     simulation.alpha(0.3).restart();
   }
+});
+
+// Export / Import
+document.getElementById('btn-export').addEventListener('click', async () => {
+  const res = await fetch('/api/export');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `fractal-graph-export-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('btn-import').addEventListener('click', () => {
+  document.getElementById('import-file').click();
+});
+
+document.getElementById('import-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await fetch('/api/import', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.error) { alert('Import error: ' + data.error); return; }
+    alert(`Imported ${data.imported_nodes} nodes, ${data.imported_edges} edges. Reloading...`);
+    location.reload();
+  } catch (err) {
+    alert('Import failed: ' + err.message);
+  }
+  e.target.value = '';
 });
 
 init();

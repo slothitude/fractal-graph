@@ -563,5 +563,56 @@ async def graph_stats() -> str:
     }, indent=2)
 
 
+# ============================================================
+# Export / Import
+# ============================================================
+
+@mcp.tool()
+async def export_graph() -> str:
+    """Export the entire knowledge graph to a portable JSON format.
+
+    Returns all nodes and edges as a JSON string that can be saved and
+    reimported via import_graph. Embeddings are not included (regenerate
+    via web_ingest or seed_from_search).
+    """
+    conn = db.get_db()
+    data = db.export_graph(conn)
+    return json.dumps(data, indent=2, default=str)
+
+
+@mcp.tool()
+async def import_graph(data: str, merge: bool = False) -> str:
+    """Import graph data from a JSON export string.
+
+    Args:
+        data: JSON string from a previous export_graph call
+        merge: If False (default), replace entire graph. If True, merge with existing data.
+    """
+    parsed = json.loads(data)
+    conn = db.get_db()
+    result = db.import_graph(conn, parsed, merge=merge)
+
+    # Re-index new nodes in ChromaDB
+    from embedder import embed
+    from chroma_store import upsert_node as chroma_upsert
+    reindexed = 0
+    errors = 0
+    for node_data in parsed.get("nodes", []):
+        try:
+            embedding = await embed(node_data["content"])
+            chroma_upsert(
+                node_data["id"], node_data["content"], embedding,
+                node_data.get("resolution_level", 2), node_data.get("parent_id"),
+                node_data.get("confidence", 0.5), node_data.get("source_url"))
+            reindexed += 1
+        except Exception:
+            errors += 1
+
+    result["chromadb_reindexed"] = reindexed
+    if errors:
+        result["chromadb_errors"] = errors
+    return json.dumps(result, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

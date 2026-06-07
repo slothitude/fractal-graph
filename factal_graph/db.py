@@ -216,3 +216,92 @@ def get_edges(conn, node_id: int, direction: str = "both") -> list[dict]:
             (node_id, node_id)
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# --- Export / Import ---
+
+def export_graph(conn) -> dict:
+    """Export the entire graph to a portable JSON structure."""
+    rows = conn.execute("SELECT * FROM nodes ORDER BY id").fetchall()
+    nodes = []
+    for row in rows:
+        d = dict(row)
+        if d.get("bbox"):
+            d["bbox"] = json.loads(d["bbox"])
+        if d.get("metadata"):
+            d["metadata"] = json.loads(d["metadata"])
+        nodes.append(d)
+
+    edge_rows = conn.execute("SELECT * FROM edges ORDER BY id").fetchall()
+    edges = [dict(row) for row in edge_rows]
+
+    return {
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "stats": {"total_nodes": len(nodes), "total_edges": len(edges)},
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def import_graph(conn, data: dict, merge: bool = False) -> dict:
+    """Import graph data from a JSON export.
+
+    Args:
+        conn: SQLite connection
+        data: Parsed JSON export dict
+        merge: If False (default), clear existing data first. If True, skip nodes with existing IDs.
+    Returns:
+        {"imported_nodes": N, "imported_edges": N}
+    """
+    version = data.get("version", 0)
+    if version != 1:
+        raise ValueError(f"Unsupported export version: {version}. Only version 1 is supported.")
+
+    nodes_data = data.get("nodes", [])
+    edges_data = data.get("edges", [])
+
+    if not merge:
+        conn.execute("DELETE FROM edges")
+        conn.execute("DELETE FROM nodes")
+        _retry_commit(conn)
+
+    imported_nodes = 0
+    for n in nodes_data:
+        if merge:
+            existing = conn.execute("SELECT id FROM nodes WHERE id = ?", (n["id"],)).fetchone()
+            if existing:
+                continue
+
+        conn.execute(
+            """INSERT OR IGNORE INTO nodes
+               (id, content, resolution_level, parent_id, confidence,
+                bbox, source_url, metadata, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (n["id"], n["content"], n.get("resolution_level", 2),
+             n.get("parent_id"), n.get("confidence", 0.5),
+             json.dumps(n["bbox"]) if n.get("bbox") else None,
+             n.get("source_url"),
+             json.dumps(n["metadata"]) if n.get("metadata") else None,
+             n.get("created_at"), n.get("updated_at")))
+        imported_nodes += 1
+
+    imported_edges = 0
+    for e in edges_data:
+        if merge:
+            existing = conn.execute("SELECT id FROM edges WHERE id = ?", (e["id"],)).fetchone()
+            if existing:
+                continue
+
+        conn.execute(
+            """INSERT OR IGNORE INTO edges
+               (id, from_node_id, to_node_id, edge_type,
+                from_resolution, to_resolution, confidence, context, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (e["id"], e["from_node_id"], e["to_node_id"], e.get("edge_type", "related"),
+             e.get("from_resolution"), e.get("to_resolution"),
+             e.get("confidence", 0.5), e.get("context"), e.get("created_at")))
+        imported_edges += 1
+
+    _retry_commit(conn)
+    return {"imported_nodes": imported_nodes, "imported_edges": imported_edges}

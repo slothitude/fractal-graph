@@ -104,5 +104,5 @@
 
 ## Outstanding (future, lower priority)
 - [x] Web UI for graph visualization (Flask + D3.js, port 8018)
-- Export/import graph to JSON/Neo4j format
+- [x] Export/import graph to JSON format (db.py + MCP tools + Web UI endpoints + download button)
 - Persistent cron-based auto-distillation (distill new domains periodically)

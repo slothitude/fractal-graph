@@ -4,7 +4,7 @@ import json
 
 import db
 from config import settings
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 
 app = Flask(__name__)
 
@@ -137,6 +137,41 @@ def api_domains():
             "total_descendants": count,
         })
     return jsonify(result)
+
+
+@app.route("/api/export")
+def api_export():
+    """Export graph as JSON file download."""
+    conn = db.get_db()
+    data = db.export_graph(conn)
+    return Response(
+        json.dumps(data, indent=2, default=str),
+        mimetype="application/json",
+        headers={"Content-Disposition": 'attachment; filename="fractal-graph-export.json"'},
+    )
+
+
+@app.route("/api/import", methods=["POST"])
+def api_import():
+    """Import graph from JSON file upload."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if not file.filename.endswith(".json"):
+        return jsonify({"error": "Only .json files supported"}), 400
+
+    try:
+        data = json.loads(file.read().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        return jsonify({"error": f"Invalid JSON: {e}"}), 400
+
+    merge = request.form.get("merge", "false").lower() == "true"
+    conn = db.get_db()
+    try:
+        result = db.import_graph(conn, data, merge=merge)
+        return jsonify({"status": "ok", **result})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":
