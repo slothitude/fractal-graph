@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from gat.graph import GodotGraph
 from gat.doc_parser import enrich_graph
 from gat.project_parser import scan_project
+from gat.validator import Validator
 
 # Paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -276,6 +277,80 @@ def get_signal_connections(scene_name: str) -> list[dict]:
     """
     g = _get_graph()
     return g.get_signal_connections(scene_name)
+
+
+# --- Validation Tools ---
+
+
+def _get_validator() -> Validator:
+    return Validator(_get_graph())
+
+
+@mcp.tool()
+def validate_property(class_name: str, property_name: str, value: str) -> dict:
+    """Validate a property value against its type hints before setting it.
+
+    Checks the property exists on the class (walking inheritance), then
+    validates value type/range/enum based on the property's hint.
+
+    Args:
+        class_name: Engine class name (e.g. "Button")
+        property_name: Property name (e.g. "text")
+        value: Value to validate (passed as string, parsed for numeric/bool)
+    """
+    v = _get_validator()
+    result = v.validate_property(class_name, property_name, value)
+    return {"valid": result.valid, "errors": result.errors, "warnings": result.warnings}
+
+
+@mcp.tool()
+def validate_node_path(scene_name: str, node_path: str) -> dict:
+    """Validate a node path resolves in a loaded scene's tree.
+
+    Walks the path segments to verify each node exists as a child
+    of the previous segment.
+
+    Args:
+        scene_name: Scene name (filename without extension)
+        node_path: Node path (e.g. "Main/Background/Sprite")
+    """
+    v = _get_validator()
+    result = v.validate_node_path(scene_name, node_path)
+    return {"valid": result.valid, "errors": result.errors, "warnings": result.warnings}
+
+
+@mcp.tool()
+def validate_signal_connection(from_type: str, signal_name: str, method_name: str) -> dict:
+    """Validate a signal connection between two nodes.
+
+    Checks signal exists on the emitting node type (walking inheritance).
+    Warns only — GDScript signals are not type-safe.
+
+    Args:
+        from_type: Engine class type of the emitting node
+        signal_name: Signal name (e.g. "pressed")
+        method_name: Handler method name on the receiving node
+    """
+    v = _get_validator()
+    result = v.validate_signal_connection(from_type, signal_name, method_name)
+    return {"valid": result.valid, "errors": result.errors, "warnings": result.warnings}
+
+
+@mcp.tool()
+def validate_scene(scene_name: str) -> dict:
+    """Full scene audit — validates node types, signal connections, and structure.
+
+    Checks:
+    - Scene exists in loaded project
+    - All node types exist (engine or project classes)
+    - All signal connections reference existing nodes
+
+    Args:
+        scene_name: Scene name (filename without extension)
+    """
+    v = _get_validator()
+    result = v.validate_scene(scene_name)
+    return {"valid": result.valid, "errors": result.errors, "warnings": result.warnings}
 
 
 # --- Documentation Search ---

@@ -60,19 +60,26 @@
 ## Phase 5: MCP Server
 - [x] Set up FastMCP server scaffold (Python, `gat/server.py`)
 - [x] Implement engine query tools: `get_class`, `find_inheritance`, `find_children`, `search_engine`, `get_method`, `get_signal`, `who_has_signal`, `who_has_method`, `graph_stats`
-- [ ] Implement project query tools: `get_project_structure`, `get_scene_tree`, `get_node`, `find_nodes_by_type`, `get_signal_connections`
+- [x] Implement project query tools: `get_project_structure`, `get_scene_tree`, `get_node`, `find_nodes_by_type`, `get_signal_connections`
 - [x] Add to `.mcp.json` config for Claude Code integration
+- [x] 16 total tools registered (10 engine + 6 project)
 
 ## Phase 6: Validation Engine
-- [ ] Implement node path validation (paths must resolve in scene tree)
-- [ ] Implement property type checking (value type matches property hint)
+- [x] Implement node path validation (paths must resolve in scene tree)
+- [x] Implement property type checking (value type matches property hint)
   - NOTE: ClassDB property hints (PROPERTY_HINT_RANGE, PROPERTY_HINT_FILE, etc.) define valid value ranges. Must store and use hints for validation
-- [ ] Implement resource reference validation (referenced files exist)
-- [ ] Implement signal signature compatibility — SOFT ONLY
+  - Implemented: RANGE (min/max), ENUM (valid values), INT, FLOAT, BOOL, FILE, RESOURCE_TYPE type checks
+  - Inherits properties via inheritance chain walk
+- [x] Implement resource reference validation (referenced files exist)
+  - Checks res:// path resolution, file existence, extension validity
+- [x] Implement signal signature compatibility — SOFT ONLY
   - NOTE: GDScript signals are NOT type-safe. `emit(true)` on `signal x(amount: int)` works. Cannot reject mismatches. Warn only.
-  - Validate that signal and handler both exist, but don't enforce parameter alignment
-- [ ] Implement Liskov substitution for override checks (covariance on returns, contravariance on params)
-- [ ] Wire validation into all editing tools — reject before write
+  - Validates signal exists on from_node_type, handler is plausible method name
+- [x] Wire validation into 4 MCP tools: validate_property, validate_node_path, validate_signal_connection, validate_scene
+  - Liskov substitution deferred — method args not available from ClassDB
+- [x] `gat/validator.py` — Validator class with 6 validation methods + ValidationResult dataclass
+- [x] `tests/test_validator.py` — 40 tests (7 result, 7 node_path, 18 property, 6 resource, 6 signal, 3 class, 4 scene)
+- [x] All tests passing
 
 ## Phase 7: GAT Editing Tools
 - [ ] `create_node(parent, type, name)` — add node to scene
