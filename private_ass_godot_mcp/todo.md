@@ -1,21 +1,21 @@
 # TODO
 
 ## Phase 1: ClassDB Extraction
-- [ ] Create Godot editor plugin scaffold (`addons/gat/`)
-- [ ] Write ClassDB dump script — iterate all classes, extract methods/properties/signals/constants/enums/inheritance
+- [x] Create Godot editor plugin scaffold (`addons/gat/`)
+- [x] Write ClassDB dump script — iterate all classes, extract methods/properties/signals/constants/enums/inheritance
 - [ ] Serialize to `engine_schema.json` (one JSON file, full Godot 4.6 schema)
 - [ ] Test dump against Godot 4.6 editor — verify completeness (spot-check: CharacterBody2D, Control, ResourceLoader)
 - [ ] Store generated schema in repo under `data/engine_schema.json`
 
 ## Phase 2: Engine Knowledge Graph
-- [ ] Design SQLite graph schema (nodes + edges tables + indexes)
-- [ ] Write graph loader: parse `engine_schema.json` → insert nodes + edges
-- [ ] Implement graph traversal: ancestry chain (INHERITS), derived classes (reverse INHERITS), class→methods/properties/signals
-- [ ] Write query library: `find_class`, `find_inheritance`, `find_children`, `find_by_type`
-- [ ] Verify queries: "all Node2D subclasses", "CharacterBody2D method list", "who has body_entered signal"
+- [x] Design SQLite graph schema (nodes + edges tables + indexes)
+- [x] Write graph loader: parse `engine_schema.json` → insert nodes + edges
+- [x] Implement graph traversal: ancestry chain (INHERITS), derived classes (reverse INHERITS), class→methods/properties/signals
+- [x] Write query library: `find_class`, `find_inheritance`, `find_children`, `find_by_type`, `find_method`, `find_signal`, `who_has_signal`, `who_has_method`
+- [x] Verify queries: 20/20 tests passing
 
 ## Phase 3: Documentation Layer (tomb/godot/ vault — 1,078 classes + 557 tutorials)
-- [ ] Add `search_documentation(query)` tool to MCP server — delegates to `tomb_search(query)` (existing FTS5 index)
+- [x] Add `search_documentation(query)` tool to MCP server — delegates to `tomb_search(query)` (existing FTS5 index)
 - [ ] Parse property tables from `tomb/godot/classes/*.md` → extract `{name, type, default}` → store in graph (fills `.tscn` default-value gap)
 - [ ] Parse `tomb/godot/tutorials/scripting/overridable_functions.md` → VIRTUAL_METHOD flag on method nodes
 - [ ] Parse YAML frontmatter `inherits` field → cross-reference against ClassDB extraction for verification
@@ -38,8 +38,8 @@
 - [ ] Insert project nodes into same graph DB with project-specific edges (INSTANCE_OF, USES_METHOD, CONNECTS_SIGNAL, REFERENCES, CONTAINS_CHILD)
 
 ## Phase 5: MCP Server
-- [ ] Set up FastMCP server scaffold (Python, port TBD)
-- [ ] Implement engine query tools: `get_class`, `find_inheritance`, `find_children`, `search_engine`, `get_method`
+- [x] Set up FastMCP server scaffold (Python, `gat/server.py`)
+- [x] Implement engine query tools: `get_class`, `find_inheritance`, `find_children`, `search_engine`, `get_method`, `get_signal`, `who_has_signal`, `who_has_method`, `graph_stats`
 - [ ] Implement project query tools: `get_project_structure`, `get_scene_tree`, `get_node`, `find_nodes_by_type`, `get_signal_connections`
 - [ ] Add to `.mcp.json` config for Claude Code integration
 
