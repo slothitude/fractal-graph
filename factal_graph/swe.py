@@ -410,19 +410,28 @@ async def run_ingest_phase(split: str = "verified_lite",
 # --- Action-to-Edit Parser ---
 
 
-def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
+def parse_action_to_edit(action_text: str, repo_soul_id: str,
+                         problem_text: str = "", repo_path: str = "") -> dict | None:
     """Parse a Meeseeks action string into a structured edit description.
 
-    Extracts:
-        - filepath: which file to edit
-        - target: which function/class to target
-        - description: what the edit should do
+    Uses multiple strategies to resolve the target file:
+        1. Graph lookup — search L3/L4 nodes, walk parent chain to L2 file
+        2. Filesystem grep — search repo for files containing target function/class
+        3. Issue-based — extract key terms from issue text, search filesystem
 
-    Returns dict or None if parsing fails.
+    Args:
+        action_text: Meeseeks action string
+        repo_soul_id: Soul ID for the repo graph
+        problem_text: Issue description (provides context for file resolution)
+        repo_path: Path to the cloned repo on disk
+
+    Returns dict with filepath, target, description or None.
     """
     conn = db.get_db()
     filepath = ""
     target = ""
+
+    # --- Extract structured info from action ---
 
     # 1. Extract backtick-quoted code references: `ClassName.method` or `function`
     backtick_refs = re.findall(r'`([A-Za-z_]\w*(?:\.[A-Za-z_]\w+)*)`', action_text)
@@ -430,7 +439,7 @@ def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
     # 2. Extract quoted file paths
     filepath_match = re.search(r'["\']([^"\']+\.\w+)["\']', action_text)
 
-    # 3. Extract function/class keywords: "method to_string", "class Foo"
+    # 3. Extract function/class keywords: "method to_string", "class Foo", "in `_rebuild`"
     kw_match = re.search(
         r'(?:function|method|class|in\s+|to\s+|in\s+`?)'
         r'(?:the\s+)?'
@@ -438,27 +447,74 @@ def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
         action_text, re.IGNORECASE,
     )
 
+    # 4. Extract function-call patterns from action: `cse(...)`, `u.subs(...)`, `Mul(...)`
+    call_refs = re.findall(r'\b([A-Za-z_]\w*)\s*\(', action_text)
+
     # Determine target from backtick refs or keyword match
     if backtick_refs:
         # Use the most specific backtick ref (longest, prefer ClassName.method)
         target = max(backtick_refs, key=len)
     elif kw_match:
         target = kw_match.group(1)
+    elif call_refs:
+        # Use first function-call ref as target (likely the main function)
+        target = call_refs[0]
 
-    # If filepath was explicitly quoted, use it
+    # Collect ALL search terms: target, backtick refs, keywords from action + issue
+    search_terms = set()
+    if target:
+        class_name, method_name = (target.split(".", 1) + [""])[:2]
+        search_terms.add(target)
+        if method_name:
+            search_terms.add(method_name)
+        if class_name:
+            search_terms.add(class_name)
+    for ref in backtick_refs:
+        parts = ref.split(".")
+        search_terms.update(parts)
+    for ref in call_refs:
+        search_terms.add(ref)
+
+    # Extract key nouns/identifiers from issue text for filesystem search
+    issue_terms = set()
+    issue_fps = []
+    issue_calls = []
+    if problem_text:
+        # Extract CamelCase identifiers and snake_case function names
+        issue_terms.update(re.findall(r'\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b', problem_text))
+        issue_terms.update(re.findall(r'\b([a-z][a-z0-9_]*(?:_[a-z][a-z0-9_]+)+)\b', problem_text))
+        # Extract identifiers that appear near code syntax (likely function/class names)
+        # Matches: cse(, cse., cse[, "cse", etc.
+        code_refs = re.findall(r'(?:^|[\s(,])\b([A-Za-z_]\w{2,})\b(?=[\s(,.\)\[/])', problem_text, re.MULTILINE)
+        issue_terms.update(code_refs)
+        # Extract quoted code references from issue
+        issue_terms.update(re.findall(r'`([A-Za-z_]\w*)`', problem_text))
+        # Extract function-call patterns from issue text: cse(...), Mul(...), etc.
+        issue_calls = re.findall(r'\b([A-Za-z_]\w{2,})\s*\(', problem_text)
+        issue_terms.update(issue_calls)
+        # Extract the first word of the issue title (often the function/class name)
+        title_line = problem_text.strip().split("\n")[0].strip()
+        first_word = re.match(r'^([A-Za-z_]\w{2,})', title_line)
+        if first_word:
+            issue_terms.add(first_word.group(1))
+        # Extract file paths mentioned in issue
+        issue_fps = re.findall(r'(?:\bfile|in|from|import)\s+[`"\']?([A-Za-z_][\w/]*\.py)[`"\']?', problem_text, re.IGNORECASE)
+        issue_fps += re.findall(r'\b(\w[\w/]*\.py)\b', problem_text)
+
+    # If filepath was explicitly quoted in action, use it (highest priority)
     if filepath_match:
         filepath = filepath_match.group(1)
 
-    # Try to resolve filepath from the repo graph via SQL
-    if not filepath and target:
-        class_name, method_name = (target.split(".", 1) + [""])[:2]
-        # Search terms: full target, then just the method/function name
-        search_terms = [target]
-        if method_name:
-            search_terms.append(method_name)
+    # Collect candidates from all strategies with scores
+    candidates = {}  # filepath -> score
 
+    # Guard: filter empty strings from search_terms
+    search_terms = {t for t in search_terms if t and len(t) > 1}
+    issue_terms = {t for t in issue_terms if t and len(t) > 1}
+
+    # --- Strategy 1: Graph lookup (score: node match count * 5) ---
+    if search_terms and repo_soul_id:
         for term in search_terms:
-            # Search L4 (methods) and L3 (functions/classes) by content
             for level in [4, 3]:
                 rows = conn.execute(
                     "SELECT id, content, metadata, parent_id FROM nodes "
@@ -467,37 +523,62 @@ def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
                     (repo_soul_id, level, f"%{term}%"),
                 ).fetchall()
                 for row in rows:
-                    meta = json.loads(row["metadata"]) if row["metadata"] else {}
-                    parent_id = row["parent_id"]
-                    if parent_id:
-                        parent = conn.execute(
-                            "SELECT metadata FROM nodes WHERE id = ?", (parent_id,)
-                        ).fetchone()
-                        if parent:
-                            pmeta = json.loads(parent["metadata"]) if parent["metadata"] else {}
-                            fp = pmeta.get("path", "")
-                            if fp:
-                                filepath = fp
-                                break
-                if filepath:
-                    break
-            if filepath:
-                break
+                    fp = _resolve_filepath_from_node(conn, row)
+                    if fp:
+                        candidates[fp] = candidates.get(fp, 0) + 5
 
-    # Fuzzy match filepath against L2 file nodes if we have a candidate
+    # --- Strategy 2: Filesystem grep by target terms (score: term match * 10) ---
+    if search_terms and repo_path and os.path.isdir(repo_path):
+        fs_hits = _grep_repo_for_target(repo_path, search_terms, prefer_dirs=[],
+                                        return_all=True)
+        for fp, count in fs_hits.items():
+            candidates[fp] = candidates.get(fp, 0) + count * 10
+
+    # --- Strategy 3: Issue-based filesystem search (score: term match * 8) ---
+    if issue_terms and repo_path and os.path.isdir(repo_path):
+        prefer_dirs = _extract_module_paths(problem_text)
+        fs_hits = _grep_repo_for_target(repo_path, issue_terms,
+                                         prefer_dirs=prefer_dirs, return_all=True)
+        for fp, count in fs_hits.items():
+            candidates[fp] = candidates.get(fp, 0) + count * 8
+
+    # --- Strategy 4: Issue-mentioned file paths (score: direct + 20) ---
+    if issue_fps and repo_path:
+        for fp in issue_fps:
+            full = os.path.join(repo_path, fp)
+            if os.path.exists(full):
+                candidates[fp] = candidates.get(fp, 0) + 20
+            # Try as basename in the repo
+            for root, dirs, files in os.walk(repo_path):
+                dirs[:] = [d for d in dirs if d not in settings.code_ingest_skip_dirs]
+                if os.path.basename(fp) in files:
+                    found = os.path.join(root, os.path.basename(fp))
+                    candidates[found] = candidates.get(found, 0) + 15
+                    break
+
+    # --- Select best candidate ---
+    if candidates:
+        # Penalize non-source paths
+        for fp in list(candidates.keys()):
+            lower = fp.lower()
+            for bad in ["/bin/", "/scripts/", "/setup", "/tests/", "/examples/",
+                         "/docs/", "/build/", "/dist/", "/.tox/", "/__pycache__"]:
+                if bad in lower:
+                    candidates[fp] -= 15
+        # Bonus: if search terms appear in the filepath itself (not just content)
+        all_terms = search_terms | issue_terms
+        for fp in list(candidates.keys()):
+            basename = os.path.basename(fp).replace(".py", "").lower()
+            for term in all_terms:
+                if term.lower() in basename:
+                    candidates[fp] += 25
+        filepath = max(candidates, key=candidates.get) if candidates else ""
+
+    # --- Validate: fuzzy match against L2 file nodes ---
     if filepath:
-        files = db.get_nodes_by_soul(conn, repo_soul_id)
-        best_match = filepath
-        best_score = 0
-        for node in files:
-            meta = node.get("metadata", {})
-            if meta.get("type") == "file":
-                node_path = meta.get("path", "")
-                score = sum(1 for a, b in zip(filepath, node_path) if a == b)
-                if score > best_score:
-                    best_score = score
-                    best_match = node_path
-        filepath = best_match
+        validated = _validate_filepath_in_graph(conn, repo_soul_id, filepath)
+        if validated:
+            filepath = validated
 
     return {
         "filepath": filepath,
@@ -505,6 +586,146 @@ def parse_action_to_edit(action_text: str, repo_soul_id: str) -> dict | None:
         "description": action_text[:500],
         "raw_action": action_text,
     }
+
+
+def _resolve_filepath_from_node(conn, node_row) -> str:
+    """Walk up the parent chain from a graph node to find the L2 file path."""
+    meta = json.loads(node_row["metadata"]) if node_row["metadata"] else {}
+
+    # L4 nodes may have 'file' metadata directly (imports, methods)
+    if "file" in meta:
+        return meta["file"]
+
+    # Walk parent chain: L4 -> L3 -> L2 (file)
+    parent_id = node_row["parent_id"] if node_row["parent_id"] else None
+    for _ in range(5):
+        if not parent_id:
+            break
+        parent = conn.execute(
+            "SELECT id, content, resolution_level, metadata, parent_id FROM nodes WHERE id = ?",
+            (parent_id,),
+        ).fetchone()
+        if not parent:
+            break
+        pmeta = json.loads(parent["metadata"]) if parent["metadata"] else {}
+        if parent["resolution_level"] <= 2 and "path" in pmeta:
+            return pmeta["path"]
+        if "file" in pmeta:
+            return pmeta["file"]
+        parent_id = parent["parent_id"]
+
+    return ""
+
+
+def _grep_repo_for_target(repo_path: str, search_terms: set[str],
+                          prefer_dirs: list[str] = [],
+                          return_all: bool = False) -> dict:
+    """Search the repo filesystem for files containing the target terms.
+
+    Uses subprocess grep for speed. Returns dict of filepath -> match_count.
+    If return_all=True, returns all candidates. Otherwise returns just the
+    best one as {best_path: score}.
+    """
+    result = {}  # filepath -> match_count
+    if not search_terms or not repo_path:
+        return result
+
+    # Filter out overly generic terms
+    generic = {"the", "a", "an", "is", "of", "to", "in", "for", "and", "or",
+                "not", "with", "from", "that", "this", "are", "was", "were",
+                "be", "been", "have", "has", "had", "can", "will", "would",
+                "could", "should", "do", "if", "when", "by", "on", "at"}
+    terms = [t for t in search_terms if t.lower() not in generic and len(t) > 2]
+    if not terms:
+        return result
+
+    # Use up to 3 most specific terms (longest first)
+    terms = sorted(terms, key=len, reverse=True)[:3]
+
+    candidates = {}  # filepath -> match_count
+    for term in terms:
+        # Use word-boundary matching (-w) for short terms to avoid
+        # substring false positives (e.g. "cse" matching "replace")
+        grep_flags = ["grep", "-rl", "--include=*.py"]
+        if len(term) <= 5:
+            grep_flags.append("-w")
+        grep_flags.extend([term, repo_path])
+        try:
+            proc = subprocess.run(
+                grep_flags,
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+        for line in proc.stdout.strip().split("\n"):
+            if line:
+                # Normalize to forward slashes
+                norm = line.replace("\\", "/")
+                candidates[norm] = candidates.get(norm, 0) + 1
+
+    if not candidates:
+        return result
+
+    if return_all:
+        return candidates
+
+    # Score candidates: prefer source/lib directories, penalize non-source
+    def _score(path: str, count: int) -> float:
+        score = count * 10.0
+        lower = path.lower()
+        for d in prefer_dirs:
+            if d.lower() in lower:
+                score += 20.0
+        for bad in ["/bin/", "/scripts/", "/setup", "/tests/", "/examples/",
+                     "/docs/", "/build/", "/dist/", "/.tox/", "/__pycache__"]:
+            if bad in lower:
+                score -= 15.0
+        score += count * 5.0
+        return score
+
+    ranked = sorted(candidates.keys(), key=lambda p: _score(p, candidates[p]), reverse=True)
+    return {ranked[0]: _score(ranked[0], candidates[ranked[0]])}
+
+
+def _extract_module_paths(text: str) -> list[str]:
+    """Extract module directory paths from issue text.
+
+    E.g. "django/core/management/commands" or "sympy/core"
+    """
+    paths = re.findall(r'([a-z][\w/]*(?:/[a-z][\w/]*)+)', text)
+    return paths
+
+
+def _validate_filepath_in_graph(conn, repo_soul_id: str, filepath: str) -> str:
+    """Check if a filepath matches an L2 file node in the graph.
+
+    If the graph has the exact file, return the graph's canonical path.
+    If not, return the original filepath unchanged.
+    """
+    rows = conn.execute(
+        "SELECT content, metadata FROM nodes "
+        "WHERE soul_id = ? AND resolution_level = 2",
+        (repo_soul_id,),
+    ).fetchall()
+    # Normalize both sides to forward slashes
+    norm_fp = filepath.replace("\\", "/")
+    best_match = ""
+    best_score = 0
+    for row in rows:
+        meta = json.loads(row["metadata"]) if row["metadata"] else {}
+        node_path = meta.get("path", "").replace("\\", "/")
+        if not node_path:
+            continue
+        # Exact basename match is the minimum bar
+        if os.path.basename(norm_fp) == os.path.basename(node_path):
+            # Score by path component overlap
+            score = sum(1 for a, b in zip(norm_fp.split("/"), node_path.split("/")) if a == b)
+            if score > best_score:
+                best_score = score
+                best_match = node_path
+    if best_match and best_score >= 1:
+        return best_match
+    return filepath
 
 
 # --- Patch Generation ---
@@ -683,13 +904,17 @@ async def solve_instance(instance: dict, repo_soul_id: str,
 
             # High confidence -> finalize
             if confidence >= 0.7 and action:
-                edit = parse_action_to_edit(action, repo_soul_id)
+                # Get repo path for filesystem search
+                l0 = _get_repo_l0_node(repo_soul_id)
+                cur_repo_path = ""
+                if l0 and l0.get("metadata"):
+                    cur_repo_path = l0["metadata"].get("path", "")
+
+                edit = parse_action_to_edit(action, repo_soul_id,
+                                             problem_text=problem,
+                                             repo_path=cur_repo_path)
                 if edit and edit.get("filepath"):
-                    # Find repo path from L0 metadata
-                    l0 = _get_repo_l0_node(repo_soul_id)
-                    repo_path = ""
-                    if l0 and l0.get("metadata"):
-                        repo_path = l0["metadata"].get("path", "")
+                    repo_path = cur_repo_path
 
                     if repo_path:
                         patch = await generate_patch(edit, repo_path, problem)
