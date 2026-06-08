@@ -81,13 +81,33 @@ CREATE INDEX idx_nodes_name ON nodes(name);
 
 ## Phase 3: Documentation Layer
 
-Attach Godot docs to graph nodes.
+Leverage the existing tomb FTS5 index + targeted markdown parsing for property defaults.
 
-**Approach**: Scrape/import Godot 4.6 docs (hosted HTML). Map doc pages to class names in the graph. Store as text blobs on node `data` JSON field.
+**Existing infrastructure**: The tomb godot vault (`tomb/godot/` — 1,078 class docs + 557 tutorials) is already FTS5-indexed in Mnemosyne's SQLite database. `tomb_search("CharacterBody2D velocity")` returns ranked snippets with context. No custom indexer needed.
 
-**Source**: `https://docs.godotengine.org/en/stable/classes/`
+**MCP integration**: GAT exposes a `search_documentation(query)` tool that delegates to `mcp__mnemosyne__tomb_search(query, category="godot")` (or `tomb_search` with domain filter). Agents get instant full-text search across all class docs and tutorials — description text, method signatures, property tables, tutorial links — without GAT parsing any markdown.
 
-**Not critical for MVP** — the graph is useful without docs. Docs are enrichment.
+**What tomb_search gives GAT for free**:
+1. **Full-text search** — FTS5 ranked results across all 1,078 class docs + 557 tutorials
+2. **Snippet context** — Returns relevant excerpts, not whole documents (efficient for agent context windows)
+3. **Already indexed** — No parsing, no indexing pipeline, no maintenance
+4. **Cross-references** — Wikilinks in the indexed text surface related classes and tutorials
+
+**What tomb_search does NOT give** (requires targeted parsing):
+1. **Property defaults** — The class docs include all default values in structured tables (e.g., `velocity | Vector2 | Vector2(0, 0)`). FTS5 search returns snippets, not parsed data. GAT needs these defaults to reconstruct full node state from `.tscn` files (which only store non-default properties).
+2. **Inheritance chains** — Frontmatter `inherits` field provides the parent class. Needed to supplement ClassDB extraction.
+3. **Virtual method flags** — `tomb/godot/tutorials/scripting/overridable_functions.md` lists all lifecycle virtual functions. Must parse once to tag method nodes in the graph.
+4. **Structured type info** — Property/method/signal tables with typed columns are text in FTS5, not queryable by type.
+
+**Parsing approach** (targeted, not bulk):
+1. **For property defaults only** — Walk `tomb/godot/classes/*.md`, parse the properties table row-by-row to extract `{name, type, default}`. Store as `data` JSON on property nodes in the graph. This is the ONE thing the tomb search index can't provide that GAT needs.
+2. **For virtual methods** — Parse `tomb/godot/tutorials/scripting/overridable_functions.md` once to get the complete set of lifecycle callbacks. Tag matching method nodes in the graph with `is_virtual: true`.
+3. **For inheritance verification** — Parse YAML frontmatter `inherits` field from each class doc. Cross-reference against ClassDB extraction to catch any discrepancies.
+4. **Skip everything else** — Descriptions, method signatures, signal tables, wikilinks, tutorials — all queryable via `tomb_search()` at agent time.
+
+**Known issues with the vault**:
+- **1,570 dead links** (`dead_links_report.md`) — mostly missing primitive type docs (`[[StringName]]`, `[[float]]`, `[[int]]`, `[[bool]]`, `[[Vector2i]]`, etc.). Irrelevant for FTS5 search (dead links are just text that doesn't resolve).
+- **Not Godot 4.6-specific** — Imported from the main branch of godot-docs, should match Godot 4.6 closely but verify version if needed.
 
 ---
 

@@ -14,11 +14,13 @@
 - [ ] Write query library: `find_class`, `find_inheritance`, `find_children`, `find_by_type`
 - [ ] Verify queries: "all Node2D subclasses", "CharacterBody2D method list", "who has body_entered signal"
 
-## Phase 3: Documentation Layer
-- [ ] Scrape Godot 4.6 class docs from docs.godotengine.org
-- [ ] Map doc pages to graph class nodes
-- [ ] Store doc text as JSON blob on node `data` field
-- [ ] Add `search_documentation(query)` tool to MCP server
+## Phase 3: Documentation Layer (tomb/godot/ vault — 1,078 classes + 557 tutorials)
+- [ ] Add `search_documentation(query)` tool to MCP server — delegates to `tomb_search(query)` (existing FTS5 index)
+- [ ] Parse property tables from `tomb/godot/classes/*.md` → extract `{name, type, default}` → store in graph (fills `.tscn` default-value gap)
+- [ ] Parse `tomb/godot/tutorials/scripting/overridable_functions.md` → VIRTUAL_METHOD flag on method nodes
+- [ ] Parse YAML frontmatter `inherits` field → cross-reference against ClassDB extraction for verification
+- NOTE: Descriptions, method signatures, signals, wikilinks, tutorials are all queryable via `tomb_search()` — no parsing needed
+- NOTE: Dead links (1,570) are irrelevant for FTS5 search — dead wikilinks are just unresolvable text in the index
 
 ## Phase 4: Project Parser
 - [ ] Evaluate `godot_parser` (stevearc/godot_parser, Python, MIT) — handles `.tscn`/`.tres` read+write, may skip custom parser entirely
