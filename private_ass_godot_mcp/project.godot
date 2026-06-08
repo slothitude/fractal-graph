@@ -1,0 +1,11 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly.
+
+config_version=5
+
+[application]
+
+config/name="GAT Dump"
+config/description="Headless ClassDB dump for Godot Agent Toolkit"
+run/main_scene=""
+config/icon=""

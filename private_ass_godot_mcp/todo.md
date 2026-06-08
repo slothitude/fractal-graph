@@ -3,9 +3,15 @@
 ## Phase 1: ClassDB Extraction
 - [x] Create Godot editor plugin scaffold (`addons/gat/`)
 - [x] Write ClassDB dump script — iterate all classes, extract methods/properties/signals/constants/enums/inheritance
-- [ ] Serialize to `engine_schema.json` (one JSON file, full Godot 4.6 schema)
-- [ ] Test dump against Godot 4.6 editor — verify completeness (spot-check: CharacterBody2D, Control, ResourceLoader)
-- [ ] Store generated schema in repo under `data/engine_schema.json`
+- [x] Serialize to `engine_schema.json` (one JSON file, full Godot 4.6 schema)
+- [x] Test dump against Godot 4.6 editor — verify completeness (spot-check: CharacterBody2D, Control, ResourceLoader)
+- [x] Store generated schema in repo under `data/engine_schema.json`
+  - 1034 classes, 11701 methods, 4091 properties, 370 signals, 4327 constants, 572 enums
+  - Generated via headless script (`headless_dump.gd` + `project.godot`)
+  - 8.6MB JSON, loaded into graph DB in 1.2s
+  - Fixed `class_name` reserved keyword issue in GDScript 4
+  - Fixed `lastrowid` unreliable after ON CONFLICT DO UPDATE — use SELECT instead
+  - Batch-loaded graph (single transaction) for performance
 
 ## Phase 2: Engine Knowledge Graph
 - [x] Design SQLite graph schema (nodes + edges tables + indexes)

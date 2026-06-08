@@ -64,13 +64,17 @@ class GodotGraph:
     def add_node(self, type: str, name: str, data: dict | None = None) -> int:
         """Insert a node, return its ID. Upserts on (type, name) conflict."""
         data_json = json.dumps(data, separators=(",", ":")) if data else None
-        cur = self.conn.execute(
+        self.conn.execute(
             "INSERT INTO nodes (type, name, data) VALUES (?, ?, ?) "
             "ON CONFLICT(type, name) DO UPDATE SET data=excluded.data",
             (type, name, data_json),
         )
         self.conn.commit()
-        node_id = cur.lastrowid
+        # Fetch the actual ID (lastrowid is unreliable after ON CONFLICT UPDATE)
+        row = self.conn.execute(
+            "SELECT id FROM nodes WHERE type=? AND name=?", (type, name)
+        ).fetchone()
+        node_id = row[0]
         # Update caches
         self._node_cache.setdefault(type, {})[name] = node_id
         if type == "class":
@@ -162,84 +166,146 @@ class GodotGraph:
     # --- Engine Schema Loading ---
 
     def load_engine_schema(self, schema_path: str | Path) -> None:
-        """Load engine_schema.json into the graph."""
+        """Load engine_schema.json into the graph (batched for speed)."""
         schema_path = Path(schema_path)
         with open(schema_path, "r", encoding="utf-8") as f:
             schema = json.load(f)
 
         print(f"[GAT] Loading {schema['total_classes']} classes from {schema_path}")
 
-        for cls in schema["classes"]:
-            class_id = self._load_class(cls)
-            self._load_class_members(class_id, cls)
+        # Batch insert: defer all FK checks and commit once
+        self.conn.execute("PRAGMA defer_foreign_keys = ON")
 
-        # Fix parent references (INHERITS edges) — classes are loaded in order
+        for cls in schema["classes"]:
+            self._load_class(cls)
+            self._load_class_members(cls)
+
+        # INHERITS edges
         for cls in schema["classes"]:
             if cls.get("inherits"):
-                parent_node = self.get_node_by_name("class", cls["inherits"])
-                child_node = self.get_node_by_name("class", cls["class"])
-                if parent_node and child_node:
-                    self.add_edge(child_node["id"], parent_node["id"], "INHERITS")
+                child_id = self._class_cache.get(cls["class"])
+                parent_id = self._class_cache.get(cls["inherits"])
+                if child_id and parent_id:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                        "VALUES (?, ?, ?)",
+                        (child_id, parent_id, "INHERITS"),
+                    )
 
+        self.conn.commit()
         print(f"[GAT] Engine schema loaded. Graph: {self.stats()}")
 
     def _load_class(self, cls: dict) -> int:
-        class_data = {
+        class_data = json.dumps({
             "is_abstract": cls.get("is_abstract", False),
             "is_singleton": cls.get("is_singleton", False),
-        }
-        return self.add_node("class", cls["class"], class_data)
+        }, separators=(",", ":"))
+        self.conn.execute(
+            "INSERT INTO nodes (type, name, data) VALUES (?, ?, ?) "
+            "ON CONFLICT(type, name) DO UPDATE SET data=excluded.data",
+            ("class", cls["class"], class_data),
+        )
+        # Use cached id or fetch
+        if cls["class"] in self._class_cache:
+            return self._class_cache[cls["class"]]
+        row = self.conn.execute(
+            "SELECT id FROM nodes WHERE type='class' AND name=?",
+            (cls["class"],),
+        ).fetchone()
+        node_id = row[0]
+        self._class_cache[cls["class"]] = node_id
+        self._node_cache.setdefault("class", {})[cls["class"]] = node_id
+        return node_id
 
-    def _load_class_members(self, class_id: int, cls: dict) -> int:
+    def _load_class_members(self, cls: dict) -> None:
+        class_id = self._class_cache[cls["class"]]
+
         for prop in cls.get("properties", []):
-            prop_id = self.add_node("property", prop["name"], {
+            prop_id = self._upsert_node("property", prop["name"], {
                 "type": prop.get("type", ""),
                 "hint": prop.get("hint", ""),
                 "hint_string": prop.get("hint_string", ""),
                 "usage": prop.get("usage", []),
             })
-            self.add_edge(class_id, prop_id, "HAS_PROPERTY")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                "VALUES (?, ?, ?)",
+                (class_id, prop_id, "HAS_PROPERTY"),
+            )
 
         for method in cls.get("methods", []):
-            method_id = self.add_node("method", method["name"], {
+            method_id = self._upsert_node("method", method["name"], {
                 "return_type": method.get("return_type", ""),
                 "is_virtual": method.get("is_virtual", False),
                 "is_vararg": method.get("is_vararg", False),
                 "args": method.get("args", []),
             })
-            self.add_edge(class_id, method_id, "HAS_METHOD")
-            if method.get("return_type"):
-                # Create a type reference if it's an engine type
-                type_name = method["return_type"]
-                if type_name and type_name not in ("null", "void", "int", "float", "bool", "String"):
-                    type_node = self.get_node_by_name("class", type_name)
-                    if type_node:
-                        self.add_edge(method_id, type_node["id"], "RETURNS")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                "VALUES (?, ?, ?)",
+                (class_id, method_id, "HAS_METHOD"),
+            )
 
         for sig in cls.get("signals", []):
-            sig_id = self.add_node("signal", sig["name"], {
+            sig_id = self._upsert_node("signal", sig["name"], {
                 "args": sig.get("args", []),
             })
-            self.add_edge(class_id, sig_id, "HAS_SIGNAL")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                "VALUES (?, ?, ?)",
+                (class_id, sig_id, "HAS_SIGNAL"),
+            )
 
         for const in cls.get("constants", []):
-            const_id = self.add_node("constant", const["name"], {
+            const_id = self._upsert_node("constant", const["name"], {
                 "value": const.get("value"),
             })
-            self.add_edge(class_id, const_id, "HAS_CONSTANT")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                "VALUES (?, ?, ?)",
+                (class_id, const_id, "HAS_CONSTANT"),
+            )
 
         for enum in cls.get("enums", []):
-            enum_id = self.add_node("enum", enum["name"], {
+            enum_id = self._upsert_node("enum", enum["name"], {
                 "values": enum.get("values", []),
             })
-            self.add_edge(class_id, enum_id, "HAS_ENUM")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                "VALUES (?, ?, ?)",
+                (class_id, enum_id, "HAS_ENUM"),
+            )
             for val in enum.get("values", []):
-                val_id = self.add_node("constant", val["name"], {
+                val_id = self._upsert_node("constant", val["name"], {
                     "value": val.get("value"),
                 })
-                self.add_edge(enum_id, val_id, "HAS_CONSTANT")
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                    "VALUES (?, ?, ?)",
+                    (enum_id, val_id, "HAS_CONSTANT"),
+                )
 
-        return class_id
+    def _upsert_node(self, type: str, name: str, data: dict | None = None) -> int:
+        """Upsert a node, return its ID. No commit (caller handles txn)."""
+        data_json = json.dumps(data, separators=(",", ":")) if data else None
+        self.conn.execute(
+            "INSERT INTO nodes (type, name, data) VALUES (?, ?, ?) "
+            "ON CONFLICT(type, name) DO UPDATE SET data=excluded.data",
+            (type, name, data_json),
+        )
+        # Check cache first
+        cache = self._node_cache.get(type, {})
+        if name in cache:
+            return cache[name]
+        row = self.conn.execute(
+            "SELECT id FROM nodes WHERE type=? AND name=?", (type, name)
+        ).fetchone()
+        node_id = row[0]
+        cache[name] = node_id
+        self._node_cache[type] = cache
+        if type == "class":
+            self._class_cache[name] = node_id
+        return node_id
 
     # --- Query API ---
 
