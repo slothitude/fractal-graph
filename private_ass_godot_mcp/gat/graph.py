@@ -446,6 +446,170 @@ class GodotGraph:
         """Search nodes by name substring."""
         return self.find_nodes(type=type, name_pattern=query, limit=limit)
 
+    # --- Project Data Loading ---
+
+    def load_project(self, parsed: "ParsedProjectFiles") -> None:
+        """Insert parsed project data into the graph.
+
+        Node types: proj_scene, proj_node, proj_script, proj_resource
+        Edge types: CONTAINS_CHILD, HAS_SCRIPT, INSTANCE_OF, CONNECTS_SIGNAL,
+                    HAS_SIGNAL_DECL, HAS_EXPORT, HAS_METHOD_DECL, REFERENCES
+        """
+        from gat.project_parser import ParsedProjectFiles
+
+        self.conn.execute("PRAGMA defer_foreign_keys = ON")
+
+        # --- Project node ---
+        if parsed.project:
+            self._upsert_node("proj_project", parsed.project.name, {
+                "version": parsed.project.version,
+                "main_scene": parsed.project.main_scene,
+                "autoloads": parsed.project.autoloads,
+                "input_actions": parsed.project.input_actions,
+                "window_size": parsed.project.window_size,
+            })
+
+        # --- Scenes, nodes, connections ---
+        for scene in parsed.scenes:
+            # Scene node (use filename as unique name)
+            scene_name = Path(scene.path).stem
+            scene_id = self._upsert_node("proj_scene", scene_name, {
+                "path": scene.path,
+                "format": scene.format,
+                "uid": scene.uid,
+                "root_node": scene.root_node,
+            })
+
+            # Nodes within the scene
+            for node in scene.nodes:
+                # Qualified name: scene_name/node_path
+                qname = f"{scene_name}/{node.name}"
+                node_id = self._upsert_node("proj_node", qname, {
+                    "scene": scene.path,
+                    "name": node.name,
+                    "type": node.type,
+                    "parent": node.parent,
+                    "properties": node.properties,
+                })
+                # CONTAINS_CHILD edge from scene or parent node
+                if node.parent == "" or node.parent == ".":
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                        "VALUES (?, ?, ?)",
+                        (scene_id, node_id, "CONTAINS_CHILD"),
+                    )
+                else:
+                    parent_qname = f"{scene_name}/{node.parent}"
+                    parent_node = self.get_node_by_name("proj_node", parent_qname)
+                    if parent_node:
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                            "VALUES (?, ?, ?)",
+                            (parent_node["id"], node_id, "CONTAINS_CHILD"),
+                        )
+                # INSTANCE_OF edge if the node type is an engine class
+                engine_class = self.get_node_by_name("class", node.type)
+                if engine_class:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO edges (from_id, to_id, relation) "
+                        "VALUES (?, ?, ?)",
+                        (node_id, engine_class["id"], "INSTANCE_OF"),
+                    )
+
+            # Signal connections
+            for conn in scene.connections:
+                from_qname = f"{scene_name}/{conn.from_node}"
+                to_qname = f"{scene_name}/{conn.to_node}"
+                from_node = self.get_node_by_name("proj_node", from_qname)
+                to_node = self.get_node_by_name("proj_node", to_qname)
+                if from_node and to_node:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO edges (from_id, to_id, relation, data) "
+                        "VALUES (?, ?, ?, ?)",
+                        (from_node["id"], to_node["id"], "CONNECTS_SIGNAL",
+                         json.dumps({"signal": conn.signal, "method": conn.method})),
+                    )
+
+        # --- Scripts ---
+        for script in parsed.scripts:
+            script_name = Path(script.path).stem
+            script_id = self._upsert_node("proj_script", script_name, {
+                "path": script.path,
+                "class_name": script.class_name,
+                "extends": script.extends,
+                "extends_type": script.extends_type,
+                "signals": script.signals,
+                "methods": script.methods,
+                "exports": script.exports,
+                "onready_vars": script.onready_vars,
+                "constants": script.constants,
+                "engine_refs": script.engine_refs,
+            })
+
+        # --- Resources ---
+        for res in parsed.resources:
+            res_name = Path(res.path).stem
+            self._upsert_node("proj_resource", res_name, {
+                "path": res.path,
+                "type": res.type,
+                "properties": res.properties,
+            })
+
+        self.conn.commit()
+
+    def get_project(self) -> dict | None:
+        """Get the loaded project node."""
+        node = self.find_nodes("proj_project", limit=1)
+        return node[0] if node else None
+
+    def get_project_scenes(self) -> list[dict]:
+        """Get all scene nodes for the loaded project."""
+        return self.find_nodes("proj_scene", limit=100)
+
+    def get_project_scripts(self) -> list[dict]:
+        """Get all script nodes for the loaded project."""
+        return self.find_nodes("proj_script", limit=500)
+
+    def get_project_nodes(self, scene_name: str) -> list[dict]:
+        """Get all nodes in a scene (by scene name, not path)."""
+        qname_prefix = f"{scene_name}/"
+        rows = self.conn.execute(
+            "SELECT id, type, name, data FROM nodes WHERE type='proj_node' AND name LIKE ?",
+            (f"{qname_prefix}%",),
+        ).fetchall()
+        return [{"id": r[0], "type": r[1], "name": r[2],
+                 "data": json.loads(r[3]) if r[3] else {}} for r in rows]
+
+    def find_nodes_by_type(self, node_type: str) -> list[dict]:
+        """Find all project nodes of a given engine type."""
+        rows = self.conn.execute(
+            "SELECT n.id, n.type, n.name, n.data FROM nodes n "
+            "WHERE n.type='proj_node' AND json_extract(n.data, '$.type') = ?",
+            (node_type,),
+        ).fetchall()
+        return [{"id": r[0], "type": r[1], "name": r[2],
+                 "data": json.loads(r[3]) if r[3] else {}} for r in rows]
+
+    def get_signal_connections(self, scene_name: str) -> list[dict]:
+        """Get all signal connections for a scene."""
+        scene = self.get_node_by_name("proj_scene", scene_name)
+        if not scene:
+            return []
+        # Find all proj_nodes in this scene, then their outgoing CONNECTS_SIGNAL edges
+        nodes = self.get_project_nodes(scene_name)
+        connections = []
+        for node in nodes:
+            edges = self.get_neighbors(node["id"], "CONNECTS_SIGNAL")
+            for edge in edges:
+                connections.append({
+                    "from_node": node["name"],
+                    "from_type": node["data"].get("type", ""),
+                    "to_node": edge["name"],
+                    "signal": edge["data"].get("signal", ""),
+                    "method": edge["data"].get("method", ""),
+                })
+        return connections
+
     def stats(self) -> dict:
         """Return graph statistics."""
         total_nodes = self.conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]

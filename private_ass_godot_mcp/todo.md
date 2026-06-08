@@ -38,19 +38,24 @@
 - NOTE: Dead links (1,570) are irrelevant for FTS5 search — dead wikilinks are just unresolvable text in the index
 
 ## Phase 4: Project Parser
-- [ ] Evaluate `godot_parser` (stevearc/godot_parser, Python, MIT) — handles `.tscn`/`.tres` read+write, may skip custom parser entirely
-- [ ] Write `.tscn` parser (or integrate godot_parser) — extract node tree, properties, signal connections, resource references
+- [x] Evaluate `godot_parser` (stevearc/godot_parser, Python, MIT) — handles `.tscn`/`.tres` read+write, may skip custom parser entirely
+  - REJECTED: doesn't support format=3 uid:// references, unmaintained since Oct 2023
+- [x] Write `.tscn` parser — extract node tree, properties, signal connections, resource references
   - NOTE: `.tscn` only stores non-default properties. Must merge with ClassDB defaults for full state
   - NOTE: Godot 4.x uses `format=3` + string UIDs (`uid://...`). Godot 3 format=2 is incompatible
   - NOTE: Node parent paths are absolute but exclude root name. Direct children use `parent="."`
   - NOTE: `instance` nodes are PackedScene references; their editable children appear as `VolatileNode`
-- [ ] Write `.gd` parser — extract class_name, extends, methods (typed or untyped), signals, onready vars, export vars, engine type references
+- [x] Write `.gd` parser — extract class_name, extends, methods (typed or untyped), signals, onready vars, export vars, engine type references
   - NOTE: Signal parameter types are informational only — never enforced at parse/runtime. Cannot validate signal type safety
   - NOTE: `class_name` registers globally; collect all declarations as project-level types
   - NOTE: Virtual methods (`_ready`, `_process`, etc.) are not explicitly marked in GDScript. Cross-reference against ClassDB virtual method list
-- [ ] Write `project.godot` parser — autoloads, input maps, project settings
-- [ ] Write `.tres`/`.res` parser — resource properties and type info
-- [ ] Insert project nodes into same graph DB with project-specific edges (INSTANCE_OF, USES_METHOD, CONNECTS_SIGNAL, REFERENCES, CONTAINS_CHILD)
+- [x] Write `project.godot` parser — autoloads, input maps, project settings
+- [x] Write `.tres`/`.res` parser — resource properties and type info
+- [x] Insert project nodes into same graph DB with project-specific edges (INSTANCE_OF, USES_METHOD, CONNECTS_SIGNAL, REFERENCES, CONTAINS_CHILD)
+  - Node types: proj_project, proj_scene, proj_node, proj_script, proj_resource
+  - Edge types: CONTAINS_CHILD, HAS_SCRIPT, INSTANCE_OF, CONNECTS_SIGNAL
+- [x] Add MCP server project query tools: load_project, get_project_structure, get_scene_tree, get_node, find_nodes_by_type, get_signal_connections
+- [x] 73 tests passing (37 engine graph + 36 project parser)
 
 ## Phase 5: MCP Server
 - [x] Set up FastMCP server scaffold (Python, `gat/server.py`)

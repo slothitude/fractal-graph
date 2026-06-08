@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 
 from gat.graph import GodotGraph
 from gat.doc_parser import enrich_graph
+from gat.project_parser import scan_project
 
 # Paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -24,6 +25,7 @@ mcp = FastMCP("GAT", instructions=(
 
 # Lazy-loaded graph instance
 _graph: GodotGraph | None = None
+_project_root: str | None = None  # Set via load_project tool
 
 
 def _get_graph() -> GodotGraph:
@@ -171,6 +173,109 @@ def who_has_method(method_name: str) -> list[dict]:
 def graph_stats() -> dict:
     """Get Godot engine graph statistics — node/edge counts by type."""
     return _get_graph().stats()
+
+
+# --- Project Tools ---
+
+
+@mcp.tool()
+def load_project(project_root: str) -> dict:
+    """Load a Godot project into the knowledge graph.
+
+    Scans the project directory, parses all .tscn, .gd, .tres files,
+    and inserts nodes/edges into the graph. Returns a summary.
+
+    Args:
+        project_root: Absolute path to the Godot project root (containing project.godot)
+    """
+    global _project_root
+    g = _get_graph()
+    _project_root = project_root
+    parsed = scan_project(project_root)
+    g.load_project(parsed)
+    return {
+        "name": parsed.project.name if parsed.project else "unknown",
+        "version": parsed.project.version if parsed.project else "",
+        "scenes": len(parsed.scenes),
+        "scripts": len(parsed.scripts),
+        "resources": len(parsed.resources),
+        "class_names": parsed.class_names,
+    }
+
+
+@mcp.tool()
+def get_project_structure() -> dict:
+    """Get the loaded project's structure: name, version, scenes, scripts, stats.
+
+    Requires load_project() to be called first.
+    """
+    g = _get_graph()
+    project = g.get_project()
+    scenes = g.get_project_scenes()
+    scripts = g.get_project_scripts()
+    return {
+        "project": _serialize_node(project) if project else None,
+        "scenes": _serialize_neighbors(scenes),
+        "scripts": _serialize_neighbors(scripts),
+        "total_scenes": len(scenes),
+        "total_scripts": len(scripts),
+    }
+
+
+@mcp.tool()
+def get_scene_tree(scene_name: str) -> dict:
+    """Get the node tree for a scene by name (filename without extension).
+
+    Returns all nodes in the scene with their types, parents, and properties.
+
+    Args:
+        scene_name: Scene name (e.g. 'main', 'game_ui')
+    """
+    g = _get_graph()
+    nodes = g.get_project_nodes(scene_name)
+    connections = g.get_signal_connections(scene_name)
+    return {
+        "scene": scene_name,
+        "nodes": _serialize_neighbors(nodes),
+        "connections": connections,
+    }
+
+
+@mcp.tool()
+def get_node(scene_name: str, node_name: str) -> dict | None:
+    """Get a specific node from a scene.
+
+    Args:
+        scene_name: Scene name (filename without extension)
+        node_name: Node name within the scene
+    """
+    g = _get_graph()
+    qname = f"{scene_name}/{node_name}"
+    node = g.get_node_by_name("proj_node", qname)
+    return _serialize_node(node) if node else None
+
+
+@mcp.tool()
+def find_nodes_by_type(node_type: str) -> list[dict]:
+    """Find all project nodes of a given engine type across all loaded scenes.
+
+    Args:
+        node_type: Engine class type (e.g. 'Button', 'Label', 'CharacterBody2D')
+    """
+    g = _get_graph()
+    nodes = g.find_nodes_by_type(node_type)
+    return _serialize_neighbors(nodes)
+
+
+@mcp.tool()
+def get_signal_connections(scene_name: str) -> list[dict]:
+    """Get all signal connections in a scene.
+
+    Args:
+        scene_name: Scene name (filename without extension)
+    """
+    g = _get_graph()
+    return g.get_signal_connections(scene_name)
 
 
 # --- Documentation Search ---
