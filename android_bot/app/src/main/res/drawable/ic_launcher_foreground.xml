@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background circle -->
+    <path
+        android:fillColor="#1a1a2e"
+        android:pathData="M54,54m-48,0a48,48 0,1 1,96 0a48,48 0,1 1,-96 0" />
+    <!-- Sloth head -->
+    <path
+        android:fillColor="#4a4a6a"
+        android:pathData="M54,22c-6,0 -14,3 -14,10c0,6 5,9 8,10v10c0,2 1,4 3,4h6c2,0 3,-2 3,-4V42c3,-1 8,-4 8,-10c0,-7 -8,-10 -14,-10z" />
+    <!-- Eyes -->
+    <path
+        android:fillColor="#00d4aa"
+        android:pathData="M47,32m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+    <path
+        android:fillColor="#00d4aa"
+        android:pathData="M61,32m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+    <!-- Smile -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#00d4aa"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M49,38 Q54,42 59,38" />
+    <!-- Circuit lines -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#00d4aa"
+        android:strokeWidth="0.8"
+        android:strokeLineCap="round"
+        android:pathData="M24,54 L38,54 L38,62 L30,62" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#00d4aa"
+        android:strokeWidth="0.8"
+        android:strokeLineCap="round"
+        android:pathData="M70,54 L84,54 L84,46 L78,46" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#00d4aa"
+        android:strokeWidth="0.8"
+        android:strokeLineCap="round"
+        android:pathData="M38,72 L54,72 L54,80" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#00d4aa"
+        android:strokeWidth="0.8"
+        android:strokeLineCap="round"
+        android:pathData="M70,72 L60,72 L60,68" />
+</vector>
