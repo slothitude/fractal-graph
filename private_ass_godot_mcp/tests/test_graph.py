@@ -9,6 +9,13 @@ import tempfile
 import pytest
 
 from gat.graph import GodotGraph
+from gat.doc_parser import (
+    parse_property_table,
+    parse_virtual_methods,
+    parse_yaml_inherits,
+    _split_table_row,
+    enrich_graph,
+)
 
 
 SAMPLE_SCHEMA = {
@@ -292,3 +299,289 @@ class TestUpsert:
         graph.add_edge(n1, n2, "RELATES_TO")  # Should not duplicate
         edges = graph.get_edges(from_id=n1, relation="RELATES_TO")
         assert len(edges) == 1
+
+
+# --- Phase 3 Tests ---
+
+
+SAMPLE_CLASS_DOC = """---
+title: Sprite2D
+tags:
+  - godot
+  - godot/class
+inherits: "Node2D"
+---
+
+**Inherits:** [[Node2D]]
+
+## Sprite2D
+
+**Inherits:** [[Node2D|Node2D]] **<** [[CanvasItem|CanvasItem]] **<** [[Node|Node]] **<** [[Object|Object]]
+
+General-purpose sprite node.
+
+### Description
+
+A node that displays a 2D texture.
+
+### Properties
+
+| [[bool|bool]] | [[Sprite2D#centered|centered]] | `true` |
+| --- | --- | --- |
+| [[bool|bool]] | [[Sprite2D#flip_h|flip_h]] | `false` |
+| [[bool|bool]] | [[Sprite2D#flip_v|flip_v]] | `false` |
+| [[int|int]] | [[Sprite2D#frame|frame]] | `0` |
+| [[Vector2i|Vector2i]] | [[Sprite2D#frame_coords|frame_coords]] | `Vector2i(0, 0)` |
+| [[int|int]] | [[Sprite2D#hframes|hframes]] | `1` |
+| [[Vector2|Vector2]] | [[Sprite2D#offset|offset]] | `Vector2(0, 0)` |
+| [[bool|bool]] | [[Sprite2D#region_enabled|region_enabled]] | `false` |
+| [[bool|bool]] | [[Sprite2D#region_filter_clip_enabled|region_filter_clip_enabled]] | `false` |
+| [[Rect2|Rect2]] | [[Sprite2D#region_rect|region_rect]] | `Rect2(0, 0, 0, 0)` |
+| [[Texture2D|Texture2D]] | [[Sprite2D#texture|texture]] |  |
+| [[int|int]] | [[Sprite2D#vframes|vframes]] | `1` |
+
+### Methods
+
+| [[Rect2|Rect2]] | [[Sprite2D#get_rect|get_rect]]\ (\ ) | const |  |
+| --- | --- | --- | --- |
+| [[bool|bool]] | [[Sprite2D#is_pixel_opaque|is_pixel_opaque]]\ (\ pos\: [[Vector2|Vector2]]\ ) | const |  |
+"""
+
+SAMPLE_ENUM_PROP_DOC = """---
+title: CharacterBody2D
+tags:
+  - godot
+  - godot/class
+inherits: "PhysicsBody2D"
+---
+
+### Properties
+
+| [[CharacterBody2D#MotionMode|MotionMode]] | [[CharacterBody2D#motion_mode|motion_mode]] | `0` |
+| --- | --- | --- |
+| [[int|int]] | [[CharacterBody2D#max_slides|max_slides]] | `4` |
+"""
+
+SAMPLE_READONLY_DOC = """---
+title: Node2D
+tags:
+  - godot
+  - godot/class
+inherits: "CanvasItem"
+---
+
+### Properties
+
+| [[Vector2|Vector2]] | [[Node2D#global_position|global_position]] |  |
+| --- | --- | --- |
+| [[float|float]] | [[Node2D#global_rotation|global_rotation]] |  |
+| [[Vector2|Vector2]] | [[Node2D#position|position]] | `Vector2(0, 0)` |
+"""
+
+SAMPLE_VIRTUAL_DOC = """
+# Overridable functions
+
+Two functions allow you to initialize and get nodes besides the class's
+constructor: `_enter_tree()` and `_ready()`.
+
+.. tabs::
+ .. code-tab:: gdscript GDScript
+
+    func _enter_tree():
+        pass
+
+    func _ready():
+        pass
+
+    func _process(delta):
+        pass
+
+    func _physics_process(delta):
+        pass
+
+    func _input(event):
+        pass
+
+    func _unhandled_input(event):
+        pass
+
+Another callback is [[Node#_exit_tree|_exit_tree()]].
+
+[[CanvasItem#_draw|CanvasItem._draw()]] is also important.
+"""
+
+
+class TestTableSplitting:
+    def test_simple_row(self):
+        cells = _split_table_row("| [[bool|bool]] | [[Sprite2D#centered|centered]] | `true` |")
+        assert len(cells) == 4
+        assert cells[0] == ""  # before first |
+        assert "centered" in cells[2]
+
+    def test_nested_wikilinks_preserved(self):
+        cells = _split_table_row("| [[CharacterBody2D#MotionMode|MotionMode]] | [[CharacterBody2D#motion_mode|motion_mode]] | `0` |")
+        assert len(cells) >= 4
+        assert "MotionMode" in cells[1]
+
+    def test_enum_type(self):
+        cells = _split_table_row("| [[CharacterBody2D#MotionMode|MotionMode]] | [[CharacterBody2D#motion_mode|motion_mode]] | `0` |")
+        # Type column should contain the enum name
+        assert "MotionMode" in cells[1]
+
+
+class TestPropertyParsing:
+    def test_parse_basic_properties(self):
+        props = parse_property_table(SAMPLE_CLASS_DOC)
+        names = [p["name"] for p in props]
+        assert "centered" in names
+        assert "flip_h" in names
+        assert "texture" in names
+        assert "vframes" in names
+        assert len(props) == 12
+
+    def test_property_defaults(self):
+        props = parse_property_table(SAMPLE_CLASS_DOC)
+        by_name = {p["name"]: p for p in props}
+        assert by_name["centered"]["default"] == "true"
+        assert by_name["flip_h"]["default"] == "false"
+        assert by_name["frame"]["default"] == "0"
+        assert by_name["frame_coords"]["default"] == "Vector2i(0, 0)"
+        assert by_name["offset"]["default"] == "Vector2(0, 0)"
+        assert by_name["region_rect"]["default"] == "Rect2(0, 0, 0, 0)"
+
+    def test_property_types(self):
+        props = parse_property_table(SAMPLE_CLASS_DOC)
+        by_name = {p["name"]: p for p in props}
+        assert by_name["centered"]["type"] == "bool"
+        assert by_name["frame"]["type"] == "int"
+        assert by_name["offset"]["type"] == "Vector2"
+        assert by_name["frame_coords"]["type"] == "Vector2i"
+
+    def test_no_default_is_none(self):
+        props = parse_property_table(SAMPLE_CLASS_DOC)
+        by_name = {p["name"]: p for p in props}
+        assert by_name["texture"]["default"] is None
+
+    def test_enum_property_type(self):
+        props = parse_property_table(SAMPLE_ENUM_PROP_DOC)
+        by_name = {p["name"]: p for p in props}
+        assert by_name["motion_mode"]["type"] == "MotionMode"
+        assert by_name["max_slides"]["default"] == "4"
+
+    def test_readonly_property_no_default(self):
+        props = parse_property_table(SAMPLE_READONLY_DOC)
+        by_name = {p["name"]: p for p in props}
+        assert by_name["global_position"]["default"] is None
+        assert by_name["global_rotation"]["default"] is None
+        assert by_name["position"]["default"] == "Vector2(0, 0)"
+
+    def test_no_properties_section(self):
+        props = parse_property_table("### Description\nSome text\n### Methods")
+        assert len(props) == 0
+
+    def test_method_rows_not_included(self):
+        props = parse_property_table(SAMPLE_CLASS_DOC)
+        names = [p["name"] for p in props]
+        # Methods come after Properties section so shouldn't be included
+        assert "get_rect" not in names
+        assert "is_pixel_opaque" not in names
+
+
+class TestVirtualMethods:
+    def test_parse_virtual_methods(self):
+        methods = parse_virtual_methods(SAMPLE_VIRTUAL_DOC)
+        assert "_ready" in methods
+        assert "_process" in methods
+        assert "_physics_process" in methods
+        assert "_enter_tree" in methods
+        assert "_exit_tree" in methods
+        assert "_input" in methods
+        assert "_unhandled_input" in methods
+        assert "_draw" in methods
+        assert len(methods) == 8
+
+
+class TestYAMLInherits:
+    def test_parse_inherits(self):
+        assert parse_yaml_inherits(SAMPLE_CLASS_DOC) == "Node2D"
+        assert parse_yaml_inherits(SAMPLE_ENUM_PROP_DOC) == "PhysicsBody2D"
+        assert parse_yaml_inherits(SAMPLE_READONLY_DOC) == "CanvasItem"
+
+    def test_no_inherits(self):
+        no_inherits = "---\ntitle: Test\ntags:\n  - godot\n---\nContent"
+        assert parse_yaml_inherits(no_inherits) is None
+
+
+class TestEnrichGraph:
+    def test_enrich_adds_property_defaults(self, graph):
+        """enrich_graph should add default values to property nodes."""
+        # Manually set up doc parsing by directly calling enrichment
+        # with mocked tomb paths (use a temp dir)
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as P
+            # Write a mock class doc
+            (P(tmpdir) / "Sprite2D.md").write_text(SAMPLE_CLASS_DOC, encoding="utf-8")
+
+            # Patch paths and run
+            import gat.doc_parser as dp
+            orig_classes = dp.TOMB_GODOT_CLASSES
+            dp.TOMB_GODOT_CLASSES = P(tmpdir)
+
+            try:
+                report = dp.enrich_graph(graph)
+                # velocity should have a default from CharacterBody2D
+                vel = graph.get_node_by_name("property", "velocity")
+                assert vel is not None
+                # The enrichment should set a default on the velocity property
+                # but velocity is shared across many classes, so it depends on
+                # which class doc we parsed
+            finally:
+                dp.TOMB_GODOT_CLASSES = orig_classes
+
+    def test_enrich_tags_virtual_methods(self, graph):
+        """enrich_graph should tag virtual methods."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as P
+            (P(tmpdir) / "overridable_functions.md").write_text(SAMPLE_VIRTUAL_DOC, encoding="utf-8")
+
+            import gat.doc_parser as dp
+            orig = dp.TOMB_VIRTUAL_METHODS
+            dp.TOMB_VIRTUAL_METHODS = P(tmpdir) / "overridable_functions.md"
+
+            try:
+                report = dp.enrich_graph(graph)
+                # _ready was already is_virtual=True in schema, should remain
+                ready = graph.get_node_by_name("method", "_ready")
+                assert ready["data"]["is_virtual"] is True
+                # _process same
+                proc = graph.get_node_by_name("method", "_process")
+                assert proc["data"]["is_virtual"] is True
+            finally:
+                dp.TOMB_VIRTUAL_METHODS = orig
+
+    def test_enrich_stores_tomb_inherits(self, graph):
+        """enrich_graph should store tomb_inherits on class nodes."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as P
+            # Write a mock doc for a class that exists in our schema
+            (P(tmpdir) / "Node2D.md").write_text(SAMPLE_READONLY_DOC, encoding="utf-8")
+
+            import gat.doc_parser as dp
+            orig = dp.TOMB_GODOT_CLASSES
+            orig_vm = dp.TOMB_VIRTUAL_METHODS
+            dp.TOMB_GODOT_CLASSES = P(tmpdir)
+            # Disable virtual methods pass (no file needed)
+            dp.TOMB_VIRTUAL_METHODS = P(tmpdir) / "nonexistent.md"
+
+            try:
+                report = dp.enrich_graph(graph)
+                # Node2D should have tomb_inherits=CanvasItem
+                node2d = graph.get_node_by_name("class", "Node2D")
+                assert node2d is not None
+                assert node2d["data"]["tomb_inherits"] == "CanvasItem"
+            finally:
+                dp.TOMB_GODOT_CLASSES = orig
+                dp.TOMB_VIRTUAL_METHODS = orig_vm

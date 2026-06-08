@@ -8,6 +8,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from gat.graph import GodotGraph
+from gat.doc_parser import enrich_graph
 
 # Paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -33,6 +34,8 @@ def _get_graph() -> GodotGraph:
         stats = _graph.stats()
         if stats["nodes"] == 0 and SCHEMA_PATH.exists():
             _graph.load_engine_schema(SCHEMA_PATH)
+            # Run Phase 3 enrichment (property defaults, virtual methods, inheritance)
+            enrich_graph(_graph)
     return _graph
 
 

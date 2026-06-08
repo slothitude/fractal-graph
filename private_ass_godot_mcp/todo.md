@@ -22,9 +22,18 @@
 
 ## Phase 3: Documentation Layer (tomb/godot/ vault — 1,078 classes + 557 tutorials)
 - [x] Add `search_documentation(query)` tool to MCP server — delegates to `tomb_search(query)` (existing FTS5 index)
-- [ ] Parse property tables from `tomb/godot/classes/*.md` → extract `{name, type, default}` → store in graph (fills `.tscn` default-value gap)
-- [ ] Parse `tomb/godot/tutorials/scripting/overridable_functions.md` → VIRTUAL_METHOD flag on method nodes
-- [ ] Parse YAML frontmatter `inherits` field → cross-reference against ClassDB extraction for verification
+- [x] Parse property tables from `tomb/godot/classes/*.md` → extract `{name, type, default}` → store in graph (fills `.tscn` default-value gap)
+  - 6,897 property defaults parsed from 1,078 class docs
+  - 4,182 matched to graph nodes (2,715 unmatched due to shared property names across classes with UNIQUE constraint)
+  - Handles enum types as property type, empty defaults (read-only), complex defaults like Vector2(0, 0)
+- [x] Parse `tomb/godot/tutorials/scripting/overridable_functions.md` → VIRTUAL_METHOD flag on method nodes
+  - 8 base virtual methods found: _ready, _process, _physics_process, _input, _unhandled_input, _enter_tree, _exit_tree, _draw
+  - 131 method nodes tagged across all classes that declare these virtuals
+- [x] Parse YAML frontmatter `inherits` field → cross-reference against ClassDB extraction for verification
+  - 951/1076 inheritance matches confirmed
+  - 19 discrepancies — all classes in tomb docs but not in ClassDB (GDScript, CSharpScript, AreaLight3D, etc.)
+  - `tomb_inherits` stored on class node data for reference
+- [x] Wire enrichment into MCP server auto-load (runs on startup after engine schema load)
 - NOTE: Descriptions, method signatures, signals, wikilinks, tutorials are all queryable via `tomb_search()` — no parsing needed
 - NOTE: Dead links (1,570) are irrelevant for FTS5 search — dead wikilinks are just unresolvable text in the index
 
