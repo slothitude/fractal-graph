@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gat": {
+      "type": "stdio",
+      "command": "C:/Python313/python.exe",
+      "args": ["-m", "gat.server"],
+      "env": {
+        "PYTHONPATH": "C:/Users/aaron/private_ass_godot_mcp"
+      }
+    }
+  }
+}

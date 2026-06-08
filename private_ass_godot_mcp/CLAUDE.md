@@ -63,8 +63,8 @@ tests/
 # Run tests
 C:/Python313/python.exe -m pytest tests/ -v
 
-# Start MCP server (for Claude Code integration)
-C:/Python313/python.exe gat/server.py
+# MCP server is configured via .mcp.json (stdio transport, PYTHONPATH set)
+# Tools appear as mcp__gat__* in Claude Code after restart
 ```
 
 ## Data Directory

@@ -41,7 +41,7 @@
 - [x] Set up FastMCP server scaffold (Python, `gat/server.py`)
 - [x] Implement engine query tools: `get_class`, `find_inheritance`, `find_children`, `search_engine`, `get_method`, `get_signal`, `who_has_signal`, `who_has_method`, `graph_stats`
 - [ ] Implement project query tools: `get_project_structure`, `get_scene_tree`, `get_node`, `find_nodes_by_type`, `get_signal_connections`
-- [ ] Add to `.mcp.json` config for Claude Code integration
+- [x] Add to `.mcp.json` config for Claude Code integration
 
 ## Phase 6: Validation Engine
 - [ ] Implement node path validation (paths must resolve in scene tree)
