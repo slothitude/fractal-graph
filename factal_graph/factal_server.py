@@ -12,6 +12,7 @@ from judges import judge_topic as judge_topic_fn, judge_answer as judge_answer_f
 from reasoning import answer as answer_fn, answer_with_triad as answer_with_triad_fn, decide as decide_fn, decide_monte_carlo as decide_mc_fn
 import meeseeks
 import code_ingest
+import larql_seed
 from growth import curiosity_scan as curiosity_scan_fn
 from enrich import (mother_knowledge_probe as enrich_probe_fn,
                    enrich_node as enrich_node_fn,
@@ -1066,6 +1067,139 @@ async def list_meeseeks() -> str:
     """
     active = meeseeks.list_meeseeks()
     return json.dumps({"meeseeks": active, "count": len(active)}, indent=2)
+
+
+# ============================================================
+# LARQL — Decompiled Transformer Weight Queries
+# ============================================================
+
+if settings.larql_enabled:
+
+    @mcp.tool()
+    async def larql_describe(entity: str) -> str:
+        """Get knowledge graph for an entity from decompiled model weights.
+
+        Queries the LARQL vindex to find all edges (relations, targets, scores)
+        associated with the given entity. The knowledge comes from the model's
+        internal weight structure, not generated text.
+
+        Args:
+            entity: Entity name to describe (e.g. 'France', 'Einstein')
+        """
+        try:
+            result = await larql_seed.extract_entity(entity)
+            return json.dumps(result, indent=2, default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e), "entity": entity})
+
+
+    @mcp.tool()
+    async def larql_walk(prompt: str, top_k: int = 10) -> str:
+        """Trace feature activation through model layers for a prompt.
+
+        Walks the prompt through each layer of the model, showing which
+        features activate and what entities/relations they connect to.
+
+        Args:
+            prompt: Text prompt to trace through layers
+            top_k: Number of top activations per layer (default 10)
+        """
+        try:
+            data = await larql_seed._larql_get(
+                "/walk", params={"prompt": prompt, "top_k": top_k}, timeout=60.0)
+            return json.dumps(data, indent=2, default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e), "prompt": prompt})
+
+
+    @mcp.tool()
+    async def larql_infer(prompt: str, top_k: int = 5) -> str:
+        """Run inference on the extracted model via LARQL.
+
+        Uses the decompiled vindex to perform inference, returning
+        completions grounded in the model's weight structure.
+
+        Args:
+            prompt: Text prompt for inference
+            top_k: Max tokens to generate (default 5)
+        """
+        try:
+            # Check if inference mode is available
+            stats = await larql_seed.extract_stats()
+            if not stats.get("loaded", {}).get("inference", False):
+                return json.dumps({
+                    "error": "Inference mode not loaded (browse-level vindex)",
+                    "prompt": prompt,
+                    "hint": "Re-extract vindex with --level inference for chat completions",
+                })
+
+            import httpx
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                r = await c.post(
+                    f"{settings.larql_server_url}/v1/chat/completions",
+                    json={
+                        "model": settings.larql_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": top_k,
+                        "temperature": 0,
+                    },
+                )
+                r.raise_for_status()
+                return json.dumps(r.json(), indent=2, default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e), "prompt": prompt})
+
+
+    @mcp.tool()
+    async def larql_select(relation: str, limit: int = 10) -> str:
+        """SQL-style edge query — find all edges of a given relation type.
+
+        Args:
+            relation: Relation type to filter by (e.g. 'capital', 'located_in')
+            limit: Max results to return (default 10)
+        """
+        try:
+            data = await larql_seed._larql_post(
+                "/select", json_data={"relation": relation, "limit": limit})
+            return json.dumps(data, indent=2, default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e), "relation": relation})
+
+
+    @mcp.tool()
+    async def larql_show_relations() -> str:
+        """List all discovered relation types in the vindex.
+
+        Returns relation names with edge counts, score ranges, layer ranges,
+        and example entities.
+        """
+        try:
+            relations = await larql_seed.extract_relations()
+            return json.dumps({
+                "count": len(relations),
+                "relations": relations,
+            }, indent=2, default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+
+    @mcp.tool()
+    async def larql_seed_entity(entity: str) -> str:
+        """Bridge: extract an entity from vindex and insert into fractal graph.
+
+        DESCRIBEs the entity in LARQL, parses edges, creates L0-L4 nodes
+        with proper hierarchy, edges, embeddings, and confidence propagation.
+
+        Args:
+            entity: Entity name to extract and seed (e.g. 'France', 'Einstein')
+        """
+        try:
+            result = await larql_seed.seed_entity(entity)
+            return json.dumps(result, indent=2, default=str)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return json.dumps({"error": str(e), "entity": entity})
 
 
 if __name__ == "__main__":

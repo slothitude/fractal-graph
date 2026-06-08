@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     swe_bench_repo_cache: str = "data/swe_repos"
     swe_bench_data_cache: str = "data/swe_bench"
 
+    # LARQL integration — decompiled transformer weight queries
+    larql_enabled: bool = True
+    larql_server_url: str = "http://192.168.0.33:7000"  # Lappy LARQL HTTP server (port 7000, 8080 blocked by Hyper-V)
+    larql_vindex_path: str = "C:\\Users\\aaron\\qwen3.5-4b.vindex"  # browse-level extracted vindex on Lappy
+    larql_model: str = "qwen3.5:4b"
+
     # Meeseeks system — task-scoped ephemeral souls
     meeseeks_max_concurrent: int = 5
     meeseeks_max_steps: int = 20
