@@ -13,6 +13,19 @@ This repo contains brainstorm docs, API credential notes, and a SQLite database 
 - `brainstorm.md` — GATv2 architecture roadmap, phase inventory, data flow description
 - `info.md` — API credentials (Google Gemini, HuggingFace) — **never commit secrets**
 - `data/searchv2.db` — SQLite database (searchv2 MCP data)
+- `notebooks/grpo_train.ipynb` — Colab GRPO training notebook for RTS commander agent
+- `setup.py` — Makes `rts_engine` pip-installable (`pip install -e .`)
+
+## RTS Engine (`rts_engine/`)
+
+Pure-Python Red Alert 2 text-state RTS engine for GRPO training. 90 tests passing.
+- `engine.py` — GameEngine: tick loop, win conditions, action execution
+- `state_encoder.py` — encode_state(): game state → compact token text
+- `action_vocab.py` — 6 tool definitions + parse_action_text() + format_tools_prompt()
+- `opponents/simple_ai.py` — SimpleAI: scripted baseline (build order → attack)
+- `rewards.py` — combined_reward(): unit balance + structure health + outcome
+- `adapters/commander_env.py` — CommanderEnv: gym-style wrapper + environment_factory()
+- `setup.py` — Minimal setup.py so `pip install -e .` works
 
 ## Related Project
 
